@@ -196,6 +196,18 @@ def test_hide_overlays_does_not_match_generic_overlay_selectors() -> None:
     assert '[class*="banner"]' in _JS_HIDE_OVERLAYS
 
 
+def test_hide_overlays_hides_backdrops_and_unlocks_scroll() -> None:
+    assert "'.cky-overlay'" in _JS_HIDE_OVERLAYS
+    assert "el === document.body" in _JS_HIDE_OVERLAYS
+    assert "d.matches(':modal')" in _JS_HIDE_OVERLAYS
+    assert "cs.position !== 'fixed'" in _JS_HIDE_OVERLAYS
+    assert "cs.pointerEvents === 'none'" in _JS_HIDE_OVERLAYS
+    assert "MIN_COVERAGE" in _JS_HIDE_OVERLAYS
+    assert "data-qa-overlay-hidden" in _JS_HIDE_OVERLAYS
+    assert "cs.overflowY === 'hidden'" in _JS_HIDE_OVERLAYS
+    assert "'overflow-x'" not in _JS_HIDE_OVERLAYS
+
+
 def test_normalize_fixed_backgrounds_script_targets_background_attachment() -> None:
     assert "backgroundAttachment" in _JS_NORMALIZE_FIXED_BACKGROUNDS
     assert "background-attachment" in _JS_NORMALIZE_FIXED_BACKGROUNDS

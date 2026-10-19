@@ -98,8 +98,15 @@ _INFLIGHT_STALE_DATA_MS = 3000
 # ---------------------------------------------------------------------------
 
 # Full selector list sourced from screenshot_viewport_patch.py.
-# Covers cookie/GDPR banners, popular consent managers, and chat widgets.
+# Covers cookie/GDPR banners, popular consent managers, and chat widgets, plus
+# the backdrops behind them, open modal <dialog>s and the scroll lock they set.
+# Backdrops are found by geometry, not by name: a generic [class*="overlay"]
+# would also hide decorative layers (.elementor-background-overlay, hero tints).
 _JS_HIDE_OVERLAYS = """() => {
+    const MIN_Z_INDEX = 10;
+    const MIN_COVERAGE = 0.9;
+    const MAX_SUBTREE_SHARE = 0.5;
+
     const SELECTORS = [
         '[class*="cookie"]',       '[id*="cookie"]',
         '[class*="gdpr"]',         '[id*="gdpr"]',
@@ -127,12 +134,71 @@ _JS_HIDE_OVERLAYS = """() => {
         '[class*="popup"]',        '[id*="popup"]',
         '[class*="modal"]',        '[id*="modal"]',
         '[class*="banner"]',       '[id*="banner"]',
+        // Backdrops the substrings above miss (class match is case-sensitive)
+        '.cky-overlay',            '.mfp-bg',
+        '.fancybox-overlay',       '.pum-overlay',
+        '.truste_overlay',         '.swal2-container',
+        '.MuiBackdrop-root',       '.ReactModal__Overlay',
     ];
     SELECTORS.forEach(sel => {
         try {
             document.querySelectorAll(sel).forEach(el => {
+                // Lock classes like body.modal-open / body.cookies-not-set
+                // match too; hiding <html>/<body> would blank the page.
+                if (el === document.documentElement || el === document.body) {
+                    return;
+                }
                 el.style.setProperty('display', 'none', 'important');
             });
+        } catch (_) {}
+    });
+
+    // ── Native modal dialogs (closing also removes their ::backdrop) ──
+    document.querySelectorAll('dialog').forEach(d => {
+        try {
+            if (d.open && d.matches(':modal')) d.close();
+        } catch (_) {}
+    });
+
+    // ── Generic backdrops: a visible, click-blocking fixed layer stacked
+    // above the page that covers the viewport but is not the page shell.
+    // Decorative fixed layers (grain, vignette) use pointer-events: none.
+    const vw = document.documentElement.clientWidth || window.innerWidth;
+    const vh = document.documentElement.clientHeight || window.innerHeight;
+    const total = document.body ? document.body.getElementsByTagName('*').length : 0;
+    document.querySelectorAll('body *').forEach(el => {
+        try {
+            const cs = window.getComputedStyle(el);
+            if (cs.position !== 'fixed') return;
+            if (cs.display === 'none' || cs.visibility === 'hidden') return;
+            if (parseFloat(cs.opacity) === 0) return;
+            if (cs.pointerEvents === 'none') return;
+            if (!(parseInt(cs.zIndex, 10) >= MIN_Z_INDEX)) return;
+            const r = el.getBoundingClientRect();
+            const w = Math.min(r.right, vw) - Math.max(r.left, 0);
+            const h = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+            if (w <= 0 || h <= 0 || (w * h) / (vw * vh) < MIN_COVERAGE) return;
+            if (el.getElementsByTagName('*').length > total * MAX_SUBTREE_SHARE) {
+                return;
+            }
+            el.style.setProperty('display', 'none', 'important');
+            el.setAttribute('data-qa-overlay-hidden', '1');
+        } catch (_) {}
+    });
+
+    // ── Scroll lock left by the popup. overflow-x stays: themes set
+    // overflow-x: hidden on purpose to clip off-canvas menus.
+    [document.documentElement, document.body].forEach(el => {
+        if (!el) return;
+        try {
+            const cs = window.getComputedStyle(el);
+            if (cs.overflowY === 'hidden' || cs.overflowY === 'clip') {
+                el.style.setProperty('overflow-y', 'visible', 'important');
+            }
+            if (el === document.body && cs.position === 'fixed') {
+                el.style.setProperty('position', 'static', 'important');
+                el.style.setProperty('top', 'auto', 'important');
+            }
         } catch (_) {}
     });
 }"""
