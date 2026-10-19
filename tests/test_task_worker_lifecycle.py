@@ -1,5 +1,7 @@
 import asyncio
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -11,6 +13,7 @@ from app.core.exceptions import ConflictError
 from app.projects.models import Project, ProjectConfig
 from app.screenshots.models import Screenshot
 from app.screenshots.service import EffectiveConfig
+from app.tasks.limiter import CaptureLimiter
 from app.tasks.models import Task, TaskCreate
 from app.tasks.service import _abort_worker_job, cancel_task, create_task, delete_task
 from app.tasks.worker import (
@@ -358,13 +361,30 @@ class _FakeWorkerSession:
         return None
 
 
+class _FakeBrowserContext:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def add_init_script(self, *_args: object) -> None:
+        return None
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 class _FakeBrowser:
     def __init__(self, connected: bool = True) -> None:
         self.closed = False
         self.connected = connected
+        self.contexts: list[_FakeBrowserContext] = []
 
     def is_connected(self) -> bool:
         return self.connected
+
+    async def new_context(self, **_kwargs: object) -> _FakeBrowserContext:
+        context = _FakeBrowserContext()
+        self.contexts.append(context)
+        return context
 
     async def close(self) -> None:
         self.closed = True
@@ -853,3 +873,162 @@ async def test_worker_marks_task_failed_when_reconnect_fails() -> None:
     assert capture_calls == 1
     assert task.status == "failed"
     assert task.completed_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Shared browser contexts and the worker-wide capture limiter
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _patched_run(
+    session: _FakeWorkerSession,
+    browser: _FakeBrowser,
+    capture: object,
+) -> Iterator[None]:
+    with (
+        patch("app.tasks.worker.settings.SEM_LIMIT", 1),
+        patch("app.tasks.worker.AsyncSession", return_value=session),
+        patch(
+            "app.tasks.worker.get_application_settings",
+            new=AsyncMock(
+                return_value=SimpleNamespace(
+                    screenshot_format="jpeg",
+                    screenshot_quality=85,
+                )
+            ),
+        ),
+        patch(
+            "app.tasks.worker.async_playwright",
+            return_value=_FakePlaywrightContext(browser),
+        ),
+        patch("app.tasks.worker.capture_screenshot", new=capture),
+    ):
+        yield
+
+
+def _two_viewport_task(urls: list[str]) -> tuple[Task, ProjectConfig]:
+    user = _user()
+    project = _project(user)
+    task = _task(
+        project,
+        user,
+        target_urls=urls,
+        override_viewports=[
+            {"width": 1280, "height": 720},
+            {"width": 390, "height": 844},
+        ],
+    )
+    return task, _config(project.id)
+
+
+async def test_worker_shares_one_context_per_url_and_browser() -> None:
+    task, config = _two_viewport_task(
+        ["https://example.com/a/", "https://example.com/b/"]
+    )
+    browser = _FakeBrowser()
+    calls: list[tuple[str, int, object]] = []
+
+    async def capture(**kwargs: object) -> SimpleNamespace:
+        viewport = kwargs["viewport"]
+        assert isinstance(viewport, dict)
+        calls.append((str(kwargs["url"]), viewport["width"], kwargs["context"]))
+        return SimpleNamespace(status="ok")
+
+    with _patched_run(_FakeWorkerSession(task, config), browser, capture):
+        await run_screenshot_task({"db_engine": object()}, str(task.id))
+
+    assert [(url, width) for url, width, _ in calls] == [
+        ("https://example.com/a/", 1280),
+        ("https://example.com/a/", 390),
+        ("https://example.com/b/", 1280),
+        ("https://example.com/b/", 390),
+    ]
+    context_a, context_b = browser.contexts
+    assert [context for *_, context in calls] == [
+        context_a,
+        context_a,
+        context_b,
+        context_b,
+    ]
+    assert context_a.closed and context_b.closed
+    assert task.status == "completed"
+
+
+async def test_worker_uses_isolated_contexts_when_reuse_disabled() -> None:
+    task, config = _two_viewport_task(["https://example.com/a/"])
+    browser = _FakeBrowser()
+    contexts: list[object] = []
+
+    async def capture(**kwargs: object) -> SimpleNamespace:
+        contexts.append(kwargs["context"])
+        return SimpleNamespace(status="ok")
+
+    with (
+        _patched_run(_FakeWorkerSession(task, config), browser, capture),
+        patch("app.tasks.worker.settings.REUSE_BROWSER_CONTEXT", False),
+    ):
+        await run_screenshot_task({"db_engine": object()}, str(task.id))
+
+    assert contexts == [None, None]
+    assert browser.contexts == []
+
+
+async def test_worker_replaces_shared_context_after_failed_capture() -> None:
+    user = _user()
+    project = _project(user)
+    task = _task(
+        project,
+        user,
+        override_viewports=[
+            {"width": 1280, "height": 720},
+            {"width": 1024, "height": 768},
+            {"width": 390, "height": 844},
+        ],
+    )
+    browser = _FakeBrowser()
+    contexts: list[object] = []
+
+    async def capture(**kwargs: object) -> SimpleNamespace:
+        contexts.append(kwargs["context"])
+        return SimpleNamespace(status="failed" if len(contexts) == 1 else "ok")
+
+    with _patched_run(_FakeWorkerSession(task, _config(project.id)), browser, capture):
+        await run_screenshot_task({"db_engine": object()}, str(task.id))
+
+    first, second = browser.contexts
+    assert contexts == [first, second, second]
+    assert first.closed and second.closed
+
+
+async def test_worker_takes_a_shared_limiter_slot_per_capture() -> None:
+    task, config = _two_viewport_task(
+        ["https://example.com/a/", "https://example.com/b/"]
+    )
+
+    class _SpyLimiter(CaptureLimiter):
+        def __init__(self) -> None:
+            super().__init__(1)
+            self.acquired = 0
+
+        async def acquire(self) -> None:
+            self.acquired += 1
+            await super().acquire()
+
+    limiter = _SpyLimiter()
+
+    async def capture(**_kwargs: object) -> SimpleNamespace:
+        assert limiter.in_use == 1
+        return SimpleNamespace(status="ok")
+
+    with (
+        _patched_run(_FakeWorkerSession(task, config), _FakeBrowser(), capture),
+        patch("app.tasks.worker.settings.SEM_LIMIT", 3),
+    ):
+        await run_screenshot_task(
+            {"db_engine": object(), "capture_limiter": limiter}, str(task.id)
+        )
+
+    assert limiter.acquired == 4
+    assert limiter.limit == 3  # resized to the task's effective sem_limit
+    assert limiter.in_use == 0

@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -7,12 +8,23 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.screenshots.models import Screenshot
 from app.screenshots.service import (
+    _JS_DETECT_LAZY_CONTENT,
     _JS_HIDE_OVERLAYS,
     _JS_NORMALIZE_FIXED_BACKGROUNDS,
+    _JS_PAUSE_VIDEOS,
+    AssetReadinessResult,
     EffectiveConfig,
+    PageAssetLoadError,
     PageStabilizationTimeoutError,
+    _decode_visible_images,
     _do_capture,
+    _evaluate_bounded,
+    _InflightTracker,
     _navigation_wait_until_chain,
+    _scroll_pass,
+    _stabilization_timeout_ms,
+    _wait_for_fonts,
+    _wait_for_quiet,
     capture_screenshot,
 )
 
@@ -87,6 +99,12 @@ class _FakePage:
         self.events.append(("screenshot", kwargs))
         return b"img"
 
+    async def set_viewport_size(self, size: dict) -> None:
+        self.events.append(("set_viewport_size", size))
+
+    async def close(self) -> None:
+        self.events.append(("close", None))
+
 
 class _TimeoutOnWaitUntilPage(_FakePage):
     """Fake page whose goto times out for specific wait_until values.
@@ -110,6 +128,7 @@ class _TimeoutOnWaitUntilPage(_FakePage):
 class _FakeContext:
     def __init__(self, page: _FakePage) -> None:
         self.page = page
+        self.closed = False
 
     async def add_init_script(self, *_args, **_kwargs) -> None:
         return None
@@ -118,7 +137,7 @@ class _FakeContext:
         return self.page
 
     async def close(self) -> None:
-        return None
+        self.closed = True
 
 
 class _FakeBrowser:
@@ -713,3 +732,420 @@ async def test_capture_screenshot_recovers_when_load_event_times_out(
 
     assert result.status == "ok"
     assert output_path.read_bytes() == b"img"
+
+
+# ---------------------------------------------------------------------------
+# Adaptive waits, readiness second chance, bounded evaluates
+# ---------------------------------------------------------------------------
+
+
+def _config(**overrides) -> EffectiveConfig:
+    values = {
+        "browser": "chromium",
+        "fmt": "jpeg",
+        "quality": 85,
+        "wait_until": "load",
+        "timeout": 1000,
+    }
+    values.update(overrides)
+    return EffectiveConfig(**values)
+
+
+class _RecordingPage(_FakePage):
+    """Fake page that records waits and can run a hook on each poll."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.waits: list[float] = []
+        self.on_wait = None
+
+    async def wait_for_timeout(self, timeout, *_args, **_kwargs) -> None:
+        self.waits.append(timeout)
+        if self.on_wait is not None:
+            self.on_wait(len(self.waits))
+
+
+def test_detect_lazy_content_ignores_native_lazy_images() -> None:
+    # WordPress marks nearly every image loading="lazy"; _JS_TRIGGER_LAZY flips
+    # those to eager, so they must not select the slow scroll profile.
+    assert 'img[loading="lazy"]' not in _JS_DETECT_LAZY_CONTENT
+    assert "img[data-src]" in _JS_DETECT_LAZY_CONTENT
+    assert '[data-wpr-lazyrender="1"]' in _JS_DETECT_LAZY_CONTENT
+
+
+def test_inflight_tracker_counts_only_tracked_request_types() -> None:
+    tracker = _InflightTracker()
+    image = _FakeRequest(resource_type="image")
+    xhr = _FakeRequest(resource_type="xhr")
+    video = _FakeRequest(resource_type="media")
+    for request in (image, xhr, video):
+        tracker.on_request(request)
+
+    assert tracker.inflight() == 1
+    assert tracker.inflight(include_data=True) == 2
+
+    tracker.on_request_done(_FakeRequest())  # never seen: no-op
+    assert tracker.inflight(include_data=True) == 2
+
+    tracker.on_request_done(image)
+    tracker.on_request_done(xhr)
+    assert tracker.inflight(include_data=True) == 0
+
+
+def test_inflight_tracker_ignores_stale_requests() -> None:
+    now = [100.0]
+    with patch("app.screenshots.service._clock", side_effect=lambda: now[0]):
+        tracker = _InflightTracker()
+        tracker.on_request(_FakeRequest(resource_type="image"))
+        tracker.on_request(_FakeRequest(resource_type="fetch"))
+        assert tracker.inflight(include_data=True) == 2
+
+        now[0] += 5  # past the 3 s data limit, within the 10 s visual one
+        assert tracker.inflight(include_data=True) == 1
+
+        now[0] += 6
+        assert tracker.inflight(include_data=True) == 0
+
+
+async def test_wait_for_quiet_ends_once_requests_finish() -> None:
+    page = _RecordingPage()
+    tracker = _InflightTracker()
+    request = _FakeRequest(resource_type="image")
+    tracker.on_request(request)
+    page.on_wait = lambda polls: polls == 5 and tracker.on_request_done(request)
+
+    await _wait_for_quiet(page, tracker, min_ms=300, quiet_ms=200, max_ms=2000)
+
+    # Busy for 5 polls (500 ms), then quiet for 200 ms — well under the cap.
+    assert sum(page.waits) == 700
+    assert all(wait <= 100 for wait in page.waits)
+
+
+async def test_wait_for_quiet_stops_at_cap_when_request_never_finishes() -> None:
+    page = _RecordingPage()
+    tracker = _InflightTracker()
+    tracker.on_request(_FakeRequest(resource_type="font"))
+
+    await _wait_for_quiet(page, tracker, min_ms=300, quiet_ms=200, max_ms=1000)
+
+    assert sum(page.waits) == 1000
+
+
+async def test_wait_for_quiet_honours_min_wait_when_idle() -> None:
+    page = _RecordingPage()
+
+    await _wait_for_quiet(
+        page, _InflightTracker(), min_ms=300, quiet_ms=200, max_ms=2000
+    )
+
+    assert sum(page.waits) == 300
+
+
+async def test_wait_for_quiet_without_tracker_keeps_fixed_pause() -> None:
+    page = _RecordingPage()
+
+    await _wait_for_quiet(page, None, min_ms=300, quiet_ms=200, max_ms=2000)
+
+    assert page.waits == [2000]
+
+
+async def test_scroll_pass_waits_adaptively_per_step() -> None:
+    page = _RecordingPage()
+    page.scroll_height = 1000
+
+    await _scroll_pass(
+        page, 300, tracker=_InflightTracker(), min_ms=300, quiet_ms=200, max_ms=2000
+    )
+
+    scrolls = [
+        script
+        for script in page.evaluated_scripts
+        if str(script).startswith("window.scrollTo(0, ")
+    ]
+    # scrollTo(0, 0) reset + positions 0, 300, 600, 900
+    assert len(scrolls) == 5
+    # An idle page waits only the per-step minimum, not the 2 s cap.
+    assert sum(page.waits) == 4 * 300
+
+
+def test_stabilization_retry_window_exceeds_base_cap() -> None:
+    config = _config(timeout=30000)
+
+    assert _stabilization_timeout_ms(config) == 25000
+    assert _stabilization_timeout_ms(config, retry=True) == 37500
+
+
+async def test_do_capture_rechecks_readiness_in_place_after_timeout() -> None:
+    page = _FakePage()
+    stability = AsyncMock(side_effect=[PageStabilizationTimeoutError("busy"), None])
+    config = _config()
+
+    with patch("app.screenshots.service._wait_for_dom_stability", stability):
+        outcome = await _do_capture(
+            _FakeBrowser(page),
+            "https://example.com/",
+            {"width": 1280, "height": 720},
+            config,
+        )
+
+    assert outcome.captured_with_unstable_dom is False
+    assert len(page.goto_calls) == 1
+    assert stability.await_count == 2
+    assert stability.await_args_list[1].args[1] == _stabilization_timeout_ms(
+        config, retry=True
+    )
+
+
+async def test_do_capture_unstable_after_second_timeout_keeps_one_navigation() -> None:
+    page = _FakePage()
+    stability = AsyncMock(side_effect=PageStabilizationTimeoutError("busy"))
+
+    with patch("app.screenshots.service._wait_for_dom_stability", stability):
+        outcome = await _do_capture(
+            _FakeBrowser(page),
+            "https://example.com/",
+            {"width": 1280, "height": 720},
+            _config(),
+        )
+
+    assert outcome.captured_with_unstable_dom is True
+    assert outcome.warning_message is not None
+    assert len(page.goto_calls) == 1
+    assert stability.await_count == 2
+
+
+async def test_do_capture_retry_attempt_skips_second_chance() -> None:
+    page = _FakePage()
+    stability = AsyncMock(side_effect=PageStabilizationTimeoutError("busy"))
+
+    with patch("app.screenshots.service._wait_for_dom_stability", stability):
+        outcome = await _do_capture(
+            _FakeBrowser(page),
+            "https://example.com/",
+            {"width": 1280, "height": 720},
+            _config(),
+            retry=True,
+        )
+
+    assert outcome.captured_with_unstable_dom is True
+    assert stability.await_count == 1
+
+
+async def test_do_capture_second_chance_asset_failure_keeps_diagnostics() -> None:
+    page = _FakePage(
+        failed_requests=[
+            _FakeRequest(
+                url="https://cdn.example.com/missing.jpg",
+                failure="net::ERR_CONNECTION_RESET",
+            )
+        ]
+    )
+    stability = AsyncMock(side_effect=[PageStabilizationTimeoutError("busy"), None])
+    decode = AsyncMock(
+        side_effect=[
+            AssetReadinessResult(visible_image_count=1),
+            PageAssetLoadError("Visible page assets did not load: 1 visible img"),
+        ]
+    )
+
+    with (
+        patch("app.screenshots.service._wait_for_dom_stability", stability),
+        patch("app.screenshots.service._decode_visible_images", decode),
+        pytest.raises(PageAssetLoadError) as exc_info,
+    ):
+        await _do_capture(
+            _FakeBrowser(page),
+            "https://example.com/",
+            {"width": 1280, "height": 720},
+            _config(),
+        )
+
+    assert "Network diagnostics" in str(exc_info.value)
+    assert "net::ERR_CONNECTION_RESET" in str(exc_info.value)
+
+
+async def test_do_capture_pauses_videos_before_screenshot() -> None:
+    page = _FakePage()
+
+    await _do_capture(
+        _FakeBrowser(page),
+        "https://example.com/",
+        {"width": 1280, "height": 720},
+        _config(),
+    )
+
+    kinds = [
+        "pause" if payload == _JS_PAUSE_VIDEOS else kind
+        for kind, payload in page.events
+    ]
+    assert "pause" in kinds
+    assert kinds.index("pause") < kinds.index("screenshot")
+
+
+async def test_capture_screenshot_records_attempt_time_for_failed_rows(
+    tmp_path: Path,
+) -> None:
+    session = _FakeSession()
+    task_id = uuid.uuid4()
+    project_id = uuid.uuid4()
+    failing = AsyncMock(side_effect=PageAssetLoadError("missing"))
+    # attempt 1: 10 → 13 s, attempt 2: 20 → 24 s
+    clock = iter([10.0, 13.0, 20.0, 24.0])
+
+    with (
+        patch("app.screenshots.service._do_capture", failing),
+        patch("app.screenshots.service._clock", side_effect=lambda: next(clock)),
+        patch(
+            "app.screenshots.service.build_file_path",
+            return_value=f"{project_id}/{task_id}/example.jpg",
+        ),
+        patch("app.screenshots.service.generate_signed_url", return_value="signed"),
+        patch("app.screenshots.service.asyncio.sleep", new=AsyncMock()),
+    ):
+        result = await capture_screenshot(
+            browser=_FakeBrowser(_FakePage()),
+            session=session,
+            task_id=task_id,
+            project_id=project_id,
+            url="https://example.com/",
+            viewport={"width": 1280, "height": 720},
+            config=_config(),
+        )
+
+    assert result.status == "failed"
+    assert result.duration_seconds == 7.0
+
+
+async def test_wait_for_fonts_raises_when_page_reports_timeout() -> None:
+    class _FontsTimeoutPage(_FakePage):
+        async def evaluate(self, script, *args, **kwargs):
+            if "document.fonts" in str(script):
+                return False
+            return await super().evaluate(script, *args, **kwargs)
+
+    with pytest.raises(PageStabilizationTimeoutError):
+        await _wait_for_fonts(_FontsTimeoutPage(), 1000)
+
+
+async def test_decode_visible_images_raises_when_page_reports_timeout() -> None:
+    page = _FakePage(asset_state={"timedOut": True})
+
+    with pytest.raises(PageAssetLoadError, match="Timed out"):
+        await _decode_visible_images(page, 1000)
+
+
+async def test_evaluate_bounded_consumes_late_failure() -> None:
+    loop = asyncio.get_running_loop()
+    reported: list[dict] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+    gate = loop.create_future()
+
+    class _HangingPage:
+        async def evaluate(self, *_args):
+            return await gate
+
+    try:
+        with (
+            patch("app.screenshots.service._JS_TIMEOUT_GRACE_MS", 0),
+            pytest.raises(TimeoutError),
+        ):
+            await _evaluate_bounded(_HangingPage(), "() => 1", 10)
+
+        # The context closes under the abandoned evaluate.
+        gate.set_exception(RuntimeError("Target page, context or browser closed"))
+        for _ in range(3):
+            await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert reported == []
+
+
+async def test_do_capture_in_shared_context_sizes_page_and_keeps_context() -> None:
+    page = _FakePage()
+    context = _FakeContext(page)
+    browser = _FakeBrowser(page)
+    browser.new_context = AsyncMock(side_effect=AssertionError("must reuse context"))
+
+    outcome = await _do_capture(
+        browser,
+        "https://example.com/",
+        {"width": 390, "height": 844},
+        _config(),
+        context=context,
+    )
+
+    assert outcome.data == b"img"
+    # Sized before anything else happens on the page, closed when done.
+    assert page.events[0] == ("set_viewport_size", {"width": 390, "height": 844})
+    assert page.events[-1] == ("close", None)
+    assert context.closed is False
+
+
+async def test_do_capture_closes_its_own_context() -> None:
+    page = _FakePage()
+    contexts: list[_FakeContext] = []
+
+    class _TrackingBrowser(_FakeBrowser):
+        async def new_context(self, **_kwargs) -> _FakeContext:
+            contexts.append(_FakeContext(self.page))
+            return contexts[-1]
+
+    await _do_capture(
+        _TrackingBrowser(page),
+        "https://example.com/",
+        {"width": 1280, "height": 720},
+        _config(),
+    )
+
+    assert len(contexts) == 1 and contexts[0].closed is True
+    assert ("set_viewport_size", {"width": 1280, "height": 720}) not in page.events
+
+
+async def test_capture_screenshot_retries_in_fresh_context(tmp_path: Path) -> None:
+    task_id = uuid.uuid4()
+    project_id = uuid.uuid4()
+    shared = _FakeContext(_FakePage())
+    outcome = type(
+        "Outcome",
+        (),
+        {
+            "data": b"img",
+            "duration": 0.5,
+            "captured_with_unstable_dom": False,
+            "warning_message": None,
+        },
+    )()
+    do_capture = AsyncMock(side_effect=[PageAssetLoadError("missing"), outcome])
+
+    with (
+        patch("app.screenshots.service._do_capture", do_capture),
+        patch(
+            "app.screenshots.service.build_file_path",
+            return_value=f"{project_id}/{task_id}/example.jpg",
+        ),
+        patch("app.screenshots.service.generate_signed_url", return_value="signed"),
+        patch("app.screenshots.service.ensure_parent"),
+        patch(
+            "app.screenshots.service.abs_file_path",
+            return_value=tmp_path / "example.jpg",
+        ),
+        patch("app.screenshots.service.asyncio.sleep", new=AsyncMock()),
+    ):
+        result = await capture_screenshot(
+            browser=_FakeBrowser(_FakePage()),
+            session=_FakeSession(),
+            task_id=task_id,
+            project_id=project_id,
+            url="https://example.com/",
+            viewport={"width": 1280, "height": 720},
+            config=_config(),
+            context=shared,
+        )
+
+    assert result.status == "ok"
+    assert [call.kwargs["context"] for call in do_capture.await_args_list] == [
+        shared,
+        None,
+    ]

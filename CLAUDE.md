@@ -125,8 +125,12 @@ A few stay `.env`-only (CORS origins, cookie flags, SMTP credentials). See
    `running` → build the flat `(url, viewport, browser)` combo list → obtain one
    Playwright browser per unique browser name via `_launch_browser` (see **Remote
    browser** below) → a **producer/consumer** pool over an `asyncio.Queue` with
-   `SEM_LIMIT` consumers calls `capture_screenshot` per combo → progress is flushed to
-   the DB periodically → final status is set at the end.
+   `SEM_LIMIT` consumers works through `(url, browser, [viewports])` groups (one group
+   per combo unless `reuse_browser_context` shares a BrowserContext across a URL's
+   viewports) → every `capture_screenshot` holds a slot of the worker-wide
+   `CaptureLimiter` ([tasks/limiter.py](app/tasks/limiter.py)), so `SEM_LIMIT` bounds
+   pages across *all* running tasks and re-captures → progress is flushed to the DB
+   periodically → final status is set at the end.
 
 3. **EffectiveConfig precedence** (which browsers run): per-viewport `browsers` >
    task `override_browsers` > legacy `override_browser` > `ProjectConfig.default_browsers`.
@@ -148,9 +152,21 @@ A few stay `.env`-only (CORS origins, cookie flags, SMTP credentials). See
 ## Worker runtime
 
 [app/worker/main.py](app/worker/main.py) defines `WorkerSettings` (`functions =
-[run_screenshot_task, recapture_screenshot]`, `max_jobs`, `job_timeout =
-TASK_JOB_TIMEOUT_SECONDS`, `allow_abort_jobs`, startup/shutdown hooks). Run it with
-`python -m arq app.worker.main.WorkerSettings` (the `worker` compose service does this).
+[run_screenshot_task, recapture_screenshot]`, `max_jobs = WORKER_MAX_JOBS`, `job_timeout =
+TASK_JOB_TIMEOUT_SECONDS`, `allow_abort_jobs`, startup/shutdown hooks). `startup` puts the
+shared `CaptureLimiter` into `ctx["capture_limiter"]`; jobs resize it to the effective
+`sem_limit` (jobs run without it — unit tests — fall back to a job-local limiter). Run it
+with `python -m arq app.worker.main.WorkerSettings` (the `worker` compose service does this).
+
+**Capture timing** ([screenshots/service.py](app/screenshots/service.py)): scroll and settle
+pauses are adaptive — `_wait_for_quiet` ends a pause once no tracked request
+(`_InflightTracker`: image/font/stylesheet/script/document; xhr/fetch only right after
+`goto`; never media) has been in flight for the quiet period, capped at the old fixed
+pause, so no wait is ever longer than before. A stabilization timeout first gets an
+in-place second chance on the same page (`_finalize_readiness` with the longer retry
+window) before the capture is marked unstable; only asset/other errors re-navigate in a
+fresh context. Page scripts that wait (`_JS_WAIT_FOR_FONTS`, `_JS_DECODE_VISIBLE_IMAGES`)
+bound themselves and run via `_evaluate_bounded`.
 
 ## Remote browser
 
@@ -173,9 +189,9 @@ Gotchas — the cross-repo contract is **manual** (no automated check; it's docu
 READMEs): the port map is duplicated in the sibling's `browser-server.mjs` and
 `_BROWSER_WS_PORTS` — **keep them in sync**; the sibling Dockerfile's `PLAYWRIGHT_VERSION`
 **must match** the `playwright` pip version (`pyproject.toml`); its `CHROMIUM_ARGS` mirror
-`_CHROMIUM_LAUNCH_ARGS` minus `--disable-dev-shm-usage`; the servers' only auth is the
-shared-secret `BROWSER_WS_PATH` (firewall ports 3000–3004); branded channels add ~1–1.5 GB
-to the image.
+`_CHROMIUM_LAUNCH_ARGS` minus `--disable-dev-shm-usage`; the servers have no auth and
+`BROWSER_WS_PATH` is not a secret (`GET /json` returns it) — firewall ports 3000–3004;
+branded channels add ~1–1.5 GB to the image.
 
 ## Frontend conventions
 

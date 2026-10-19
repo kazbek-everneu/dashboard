@@ -16,6 +16,7 @@ from app.screenshots.service import (
     build_recapture_job_id,
     request_screenshot_recapture,
 )
+from app.tasks.limiter import CaptureLimiter
 from app.tasks.models import Task
 from app.tasks.worker import recapture_screenshot, reset_orphaned_recapturing
 
@@ -444,3 +445,54 @@ async def test_reset_orphaned_recapturing_noop_when_none_stuck() -> None:
         reset = await reset_orphaned_recapturing(object())
 
     assert reset == 0
+
+
+async def test_worker_recapture_takes_capture_slot_before_connecting() -> None:
+    user = _user()
+    project = _project(user)
+    task = _task(project, user, status="failed", progress_done=0, progress_failed=1)
+    screenshot = _screenshot(task, status="recapturing", error_message=None)
+    session = _FakeWorkerSession(task, _config(project.id), [screenshot])
+    browser = _FakeBrowser()
+    events: list[str] = []
+
+    class _OrderLimiter(CaptureLimiter):
+        async def acquire(self) -> None:
+            events.append("slot")
+            await super().acquire()
+
+    async def fake_launch(*_args: object) -> _FakeBrowser:
+        events.append("launch")
+        return browser
+
+    async def fake_capture(**kwargs: object) -> Screenshot:
+        existing = kwargs["existing"]
+        assert isinstance(existing, Screenshot)
+        existing.status = "ok"
+        return existing
+
+    limiter = _OrderLimiter(2)
+    with (
+        patch("app.tasks.worker.AsyncSession", return_value=session),
+        patch(
+            "app.tasks.worker.get_application_settings",
+            new=AsyncMock(
+                return_value=SimpleNamespace(
+                    screenshot_format="jpeg", screenshot_quality=85
+                )
+            ),
+        ),
+        patch(
+            "app.tasks.worker.async_playwright",
+            return_value=_FakePlaywrightContext(),
+        ),
+        patch("app.tasks.worker._launch_browser", new=fake_launch),
+        patch("app.tasks.worker.capture_screenshot", new=fake_capture),
+    ):
+        await recapture_screenshot(
+            {"db_engine": object(), "capture_limiter": limiter}, str(screenshot.id)
+        )
+
+    assert events == ["slot", "launch"]
+    assert limiter.in_use == 0
+    assert screenshot.status == "ok"

@@ -16,7 +16,7 @@ services:
   worker:
     environment:
       BROWSER_WS_ENDPOINT: "ws://browser"   # base host; worker appends per-browser port
-      BROWSER_WS_PATH: "${BROWSER_WS_PATH:-}"   # shared-secret ws path; must match browser
+      BROWSER_WS_PATH: "${BROWSER_WS_PATH:-}"   # ws path; must match browser
     volumes:
       - .:/app
       - ./data:/app/data

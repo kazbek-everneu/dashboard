@@ -156,13 +156,14 @@ export default function TaskDetailPage() {
     })
   }, [task, projectConfig, screenshots])
 
-  const averageCaptureSeconds = useMemo(
-    () =>
-      screenshots.length > 0
-        ? screenshots.reduce((sum, s) => sum + s.duration_seconds, 0) / screenshots.length
-        : null,
-    [screenshots],
-  )
+  // Only successful captures: a failed row's duration is the time spent across
+  // its attempts, not a goto → screenshot capture time.
+  const averageCaptureSeconds = useMemo(() => {
+    const captured = screenshots.filter((s) => s.status === "ok")
+    return captured.length > 0
+      ? captured.reduce((sum, s) => sum + s.duration_seconds, 0) / captured.length
+      : null
+  }, [screenshots])
 
   if (isLoading) return <StateMessage compact title="Loading task" description="Preparing task details..." />
   if (!task) return <StateMessage compact tone="destructive" title="Task not found" />

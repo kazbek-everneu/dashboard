@@ -39,6 +39,7 @@ class ApplicationSettings(SQLModel, table=True):
     # Workers & performance
     sem_limit: int | None = Field(default=None, ge=1, le=64)
     task_job_timeout_seconds: int | None = Field(default=None, ge=1)
+    reuse_browser_context: bool | None = Field(default=None)
     # Security & sessions
     access_token_expire_minutes: int | None = Field(default=None, ge=1)
     password_reset_token_expire_minutes: int | None = Field(default=None, ge=1)
@@ -60,6 +61,7 @@ class ApplicationSettingsRead(SQLModel):
     screenshot_quality: int
     sem_limit: int
     task_job_timeout_seconds: int
+    reuse_browser_context: bool
     access_token_expire_minutes: int
     password_reset_token_expire_minutes: int
     password_reset_rate_limit_max: int
@@ -76,6 +78,7 @@ class ApplicationSettingsUpdate(SQLModel):
     screenshot_quality: int | None = Field(default=None, ge=0, le=100)
     sem_limit: int | None = Field(default=None, ge=1, le=64)
     task_job_timeout_seconds: int | None = Field(default=None, ge=1)
+    reuse_browser_context: bool | None = None
     access_token_expire_minutes: int | None = Field(default=None, ge=1)
     password_reset_token_expire_minutes: int | None = Field(default=None, ge=1)
     password_reset_rate_limit_max: int | None = Field(default=None, ge=1)

@@ -101,6 +101,7 @@ export interface ApplicationSettings {
   // Workers & performance
   sem_limit: number
   task_job_timeout_seconds: number
+  reuse_browser_context: boolean
   // Security & sessions
   access_token_expire_minutes: number
   password_reset_token_expire_minutes: number
@@ -119,6 +120,7 @@ export interface ApplicationSettingsUpdate {
   screenshot_quality?: number
   sem_limit?: number
   task_job_timeout_seconds?: number
+  reuse_browser_context?: boolean
   access_token_expire_minutes?: number
   password_reset_token_expire_minutes?: number
   password_reset_rate_limit_max?: number

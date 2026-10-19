@@ -14,6 +14,7 @@ from app.settings.models import (
 _ENV_FALLBACKS: dict[str, str] = {
     "sem_limit": "SEM_LIMIT",
     "task_job_timeout_seconds": "TASK_JOB_TIMEOUT_SECONDS",
+    "reuse_browser_context": "REUSE_BROWSER_CONTEXT",
     "access_token_expire_minutes": "ACCESS_TOKEN_EXPIRE_MINUTES",
     "password_reset_token_expire_minutes": "PASSWORD_RESET_TOKEN_EXPIRE_MINUTES",
     "password_reset_rate_limit_max": "PASSWORD_RESET_RATE_LIMIT_MAX",

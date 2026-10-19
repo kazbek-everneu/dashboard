@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -14,7 +15,11 @@ from app.settings.models import (
     ApplicationSettings,
     ApplicationSettingsUpdate,
 )
-from app.settings.service import get_application_settings, update_application_settings
+from app.settings.service import (
+    get_application_settings,
+    resolve_setting,
+    update_application_settings,
+)
 from app.tasks.models import Task, TaskCreate, TaskRead
 
 
@@ -163,3 +168,13 @@ def test_task_models_exclude_removed_format_quality_and_timeout_fields() -> None
     assert "override_format" not in create_payload
     assert "override_quality" not in create_payload
     assert "override_timeout" not in create_payload
+
+
+def test_reuse_browser_context_defaults_on_and_db_override_wins() -> None:
+    assert resolve_setting(SimpleNamespace(), "reuse_browser_context") is True
+    assert (
+        resolve_setting(
+            SimpleNamespace(reuse_browser_context=False), "reuse_browser_context"
+        )
+        is False
+    )

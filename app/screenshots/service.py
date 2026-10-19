@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from playwright.async_api import Browser, Page, Request, Response
+from playwright.async_api import Browser, BrowserContext, Page, Request, Response
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 # before taking the screenshot, so do not let the final screenshot block on it.
 os.environ.setdefault("PW_TEST_SCREENSHOT_NO_FONTS_READY", "1")
 
+# Module-level clock so tests can patch it without touching the global
+# time.monotonic that the asyncio event loop itself relies on.
+_clock = time.monotonic
+
 _RETRY_COUNT = 1
 _RETRY_DELAY_S = 2.0  # seconds between attempts
 _STABILITY_SAMPLE_MS = 500
@@ -38,6 +42,13 @@ _STABILITY_REQUIRED_CYCLES = 3
 _MIN_SETTLE_TIMEOUT_MS = 8000
 _MAX_SETTLE_TIMEOUT_MS = 25000
 _RETRY_SETTLE_MULTIPLIER = 1.5
+# The retry window has its own, higher cap: with the default 30 s project
+# timeout the base window is already clamped to _MAX_SETTLE_TIMEOUT_MS, so
+# capping the retry at the same value made the multiplier a no-op.
+_MAX_RETRY_SETTLE_TIMEOUT_MS = 37500
+# Extra time the outer asyncio safety net allows on top of a timeout the page
+# script already enforces itself.
+_JS_TIMEOUT_GRACE_MS = 2000
 
 # Scroll/settle tuning. The fixed pauses below only exist to *trigger* lazy
 # loads as we scroll; the actual wait-for-readiness is handled adaptively by
@@ -54,6 +65,32 @@ _NETWORKIDLE_PROBE_LAZY_MS = 5000  # non-fatal networkidle probe, lazy pages
 _NETWORKIDLE_PROBE_FAST_MS = 1500  # non-fatal networkidle probe, no lazy content
 _POST_TRIGGER_WAIT_LAZY_MS = 500  # pause after firing lazy triggers, lazy pages
 _POST_TRIGGER_WAIT_FAST_MS = 150  # pause after firing lazy triggers, no lazy
+
+# Adaptive waits. The constants above are now the *caps* of each wait; within a
+# cap the wait ends as soon as no tracked request has been in flight for the
+# quiet period (see _wait_for_quiet). So no wait is ever longer than before —
+# it just stops idling once the page has actually finished loading.
+_MAX_SCROLL_STEPS = 200  # guard against infinite-scroll pages
+_QUIET_POLL_MS = 100
+_STEP_MIN_LAZY_PASS1_MS = 300  # covers throttled scroll-listener lazy loaders
+_STEP_MIN_FAST_PASS1_MS = 150
+_STEP_MIN_PASS2_MS = 100
+_STEP_QUIET_MS = 200
+_STEP_QUIET_PASS2_MS = 100
+_SETTLE_MIN_MS = 300
+_SETTLE_QUIET_MS = 500
+_POST_GOTO_QUIET_MS = 500
+_POST_GOTO_QUIET_CAP_MS = 5000
+# Request types that change what the screenshot shows. media is excluded on
+# purpose: video/audio stream via range requests that never go quiet. xhr/fetch
+# only count right after navigation — analytics and long-polling would
+# otherwise pin every later wait at its cap.
+_TRACKED_VISUAL_TYPES = frozenset({"image", "font", "stylesheet", "script", "document"})
+_TRACKED_DATA_TYPES = frozenset({"xhr", "fetch"})
+# Requests in flight longer than this are treated as background (long-poll,
+# streaming, an occasional missing requestfinished) and stop blocking a wait.
+_INFLIGHT_STALE_MS = 10000
+_INFLIGHT_STALE_DATA_MS = 3000
 
 
 # ---------------------------------------------------------------------------
@@ -182,9 +219,11 @@ _JS_FORCE_WP_ROCKET_LAZY_RENDER = """() => {
 # Cheap one-shot probe: does this page have any deferred/lazy content that needs
 # the generous scroll-and-settle profile? Mirrors the selectors handled by
 # _JS_TRIGGER_LAZY / _JS_FORCE_WP_ROCKET_LAZY_RENDER plus WP Rocket lazy-render.
+# Native img[loading="lazy"] is deliberately NOT a trigger: WordPress puts it on
+# nearly every image, and _JS_TRIGGER_LAZY flips those to eager before any
+# scrolling, so they start loading without the slow profile.
 _JS_DETECT_LAZY_CONTENT = """() => {
     const sel = [
-        'img[loading="lazy"]',
         'iframe[loading="lazy"]',
         'img[data-src]',
         'img[data-srcset]',
@@ -275,16 +314,38 @@ _JS_IO_OVERRIDE = """
 """
 
 
-_JS_WAIT_FOR_FONTS = """async () => {
+# Bounded in the page itself (resolves false on timeout) so the Python side
+# never has to abandon a pending evaluate — see _evaluate_bounded.
+_JS_WAIT_FOR_FONTS = """async (timeoutMs) => {
     if (!document.fonts || !document.fonts.ready) {
         return true;
     }
-    await document.fonts.ready;
-    return true;
+    return await Promise.race([
+        document.fonts.ready.then(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+    ]);
+}"""
+
+
+# Pauses videos that already have a frame (readyState >= HAVE_CURRENT_DATA):
+# the screenshot still shows a real video frame, but the decoder stops burning
+# CPU through the long scroll/settle phase. Videos without a frame keep loading.
+_JS_PAUSE_VIDEOS = """() => {
+    document.querySelectorAll('video').forEach((video) => {
+        try {
+            if (!video.paused && video.readyState >= 2) {
+                video.pause();
+            }
+        } catch (_) {}
+    });
 }"""
 
 
 _JS_DECODE_VISIBLE_IMAGES = """async (timeoutMs) => {
+  // Overall deadline enforced in the page (returns {timedOut: true}) so the
+  // Python side never has to abandon a pending evaluate.
+  const overallTimeout = timeoutMs || 5000;
+  const run = async () => {
     const perAssetTimeout = Math.max(500, Math.min(timeoutMs || 5000, 5000));
     const missingSamples = [];
 
@@ -414,6 +475,13 @@ _JS_DECODE_VISIBLE_IMAGES = """async (timeoutMs) => {
         hiddenPendingImageCount: hiddenPendingImages.length,
         missingSamples,
     };
+  };
+  return await Promise.race([
+    run(),
+    new Promise((resolve) => setTimeout(
+        () => resolve({ timedOut: true }), overallTimeout
+    )),
+  ]);
 }"""
 
 
@@ -590,6 +658,46 @@ class NetworkDiagnostics:
         return "Network diagnostics: " + " | ".join(parts)
 
 
+class _InflightTracker:
+    """Tracks in-flight page requests that affect what the screenshot shows.
+
+    Fed by the page's request / requestfinished / requestfailed events, attached
+    before navigation. Requests are keyed by the Request object itself, so a
+    finish for a request we never saw is a no-op and the count can't go
+    negative; each redirect hop is its own Request and finishes on its own.
+    """
+
+    def __init__(self) -> None:
+        # request -> (started_at, is_data)
+        self._inflight: dict[object, tuple[float, bool]] = {}
+
+    def on_request(self, request: Request) -> None:
+        resource_type = str(getattr(request, "resource_type", ""))
+        if resource_type in _TRACKED_VISUAL_TYPES:
+            self._inflight[request] = (_clock(), False)
+        elif resource_type in _TRACKED_DATA_TYPES:
+            self._inflight[request] = (_clock(), True)
+
+    def on_request_done(self, request: Request) -> None:
+        self._inflight.pop(request, None)
+
+    def inflight(self, *, include_data: bool = False) -> int:
+        now = _clock()
+        count = 0
+        for started_at, is_data in self._inflight.values():
+            if is_data and not include_data:
+                continue
+            stale_ms = _INFLIGHT_STALE_DATA_MS if is_data else _INFLIGHT_STALE_MS
+            if (now - started_at) * 1000 < stale_ms:
+                count += 1
+        return count
+
+    def attach(self, page: Page) -> None:
+        page.on("request", self.on_request)
+        page.on("requestfinished", self.on_request_done)
+        page.on("requestfailed", self.on_request_done)
+
+
 @dataclass
 class CaptureOutcome:
     data: bytes
@@ -643,16 +751,39 @@ def _navigation_wait_until_chain(config: EffectiveConfig) -> list[str]:
 def _stabilization_timeout_ms(config: EffectiveConfig, retry: bool = False) -> int:
     base = max(_MIN_SETTLE_TIMEOUT_MS, min(config.timeout, _MAX_SETTLE_TIMEOUT_MS))
     if retry:
-        return min(int(base * _RETRY_SETTLE_MULTIPLIER), _MAX_SETTLE_TIMEOUT_MS)
+        return min(int(base * _RETRY_SETTLE_MULTIPLIER), _MAX_RETRY_SETTLE_TIMEOUT_MS)
     return base
 
 
+def _consume_task_result(task: asyncio.Task) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+async def _evaluate_bounded(page: Page, script: str, timeout_ms: int) -> Any:
+    """Run ``page.evaluate(script, timeout_ms)`` for a self-bounding script.
+
+    The script enforces *timeout_ms* itself; the outer asyncio timeout (plus a
+    grace period) is only a safety net for a wedged page. The evaluate runs as
+    its own task whose result is always retrieved, so abandoning it never leaves
+    Playwright's protocol future unobserved (which logged "Future exception was
+    never retrieved: TargetClosedError" once the context closed under it).
+    """
+    task = asyncio.ensure_future(page.evaluate(script, timeout_ms))
+    task.add_done_callback(_consume_task_result)
+    return await asyncio.wait_for(
+        asyncio.shield(task), (timeout_ms + _JS_TIMEOUT_GRACE_MS) / 1000
+    )
+
+
 async def _wait_for_fonts(page: Page, timeout_ms: int) -> None:
+    msg = "Timed out waiting for fonts to be ready"
     try:
-        await asyncio.wait_for(page.evaluate(_JS_WAIT_FOR_FONTS), timeout_ms / 1000)
+        ready = await _evaluate_bounded(page, _JS_WAIT_FOR_FONTS, timeout_ms)
     except TimeoutError as exc:
-        msg = "Timed out waiting for fonts to be ready"
         raise PageStabilizationTimeoutError(msg) from exc
+    if ready is False:
+        raise PageStabilizationTimeoutError(msg)
 
 
 def _int_from_mapping(raw: dict[str, Any], key: str) -> int:
@@ -724,14 +855,13 @@ def _is_blank_capture_state(
 
 
 async def _decode_visible_images(page: Page, timeout_ms: int) -> AssetReadinessResult:
+    msg = "Timed out waiting for visible image/background assets"
     try:
-        raw = await asyncio.wait_for(
-            page.evaluate(_JS_DECODE_VISIBLE_IMAGES, timeout_ms),
-            timeout_ms / 1000,
-        )
+        raw = await _evaluate_bounded(page, _JS_DECODE_VISIBLE_IMAGES, timeout_ms)
     except TimeoutError as exc:
-        msg = "Timed out waiting for visible image/background assets"
         raise PageAssetLoadError(msg) from exc
+    if isinstance(raw, dict) and raw.get("timedOut"):
+        raise PageAssetLoadError(msg)
 
     result = _asset_readiness_from_raw(raw)
     if result.hidden_pending_image_count:
@@ -781,14 +911,14 @@ async def _wait_for_dom_stability(
     *,
     allow_interactive_ready_state: bool = False,
 ) -> None:
-    deadline = time.monotonic() + (timeout_ms / 1000)
+    deadline = _clock() + (timeout_ms / 1000)
     stable_cycles = 0
     previous_state: dict[str, int | str] | None = None
     ready_states = {"complete"}
     if allow_interactive_ready_state:
         ready_states.add("interactive")
 
-    while time.monotonic() < deadline:
+    while _clock() < deadline:
         current_state = await _collect_stability_state(page)
         is_ready = (
             current_state.get("readyState") in ready_states
@@ -811,22 +941,80 @@ async def _wait_for_dom_stability(
     raise PageStabilizationTimeoutError("Timed out waiting for DOM/layout stability")
 
 
-async def _scroll_pass(page: Page, step: int, pause_ms: int) -> None:
+async def _wait_for_quiet(
+    page: Page,
+    tracker: _InflightTracker | None,
+    *,
+    min_ms: float,
+    quiet_ms: float,
+    max_ms: float,
+    include_data: bool = False,
+) -> None:
+    """Wait until no tracked request has been in flight for *quiet_ms*.
+
+    Never shorter than *min_ms* (gives throttled scroll listeners time to start
+    their requests) and never longer than *max_ms* — the fixed pause this
+    replaces — so a page is only ever waited on less than before, not more.
+    Without a tracker it degrades to the old fixed pause of *max_ms*.
+
+    Polls via page.wait_for_timeout: its reply arrives after every request event
+    the browser emitted before it, so the in-flight count is current even when
+    events are delayed on a busy browser host. Elapsed time is the larger of the
+    summed poll intervals and the real clock, which keeps the cap honest on a
+    CPU-starved host and the loop finite under test fakes.
+    """
+    if tracker is None:
+        await page.wait_for_timeout(max_ms)
+        return
+    started = _clock()
+    waited = 0.0
+    # Quiet is measured from the first poll that saw nothing in flight — the
+    # conservative end of the interval in which the last request finished.
+    quiet_since: float | None = 0.0
+    while True:
+        elapsed = max(waited, (_clock() - started) * 1000)
+        if tracker.inflight(include_data=include_data):
+            quiet_since = None
+        elif quiet_since is None:
+            quiet_since = elapsed
+        if elapsed >= max_ms or (
+            elapsed >= min_ms
+            and quiet_since is not None
+            and elapsed - quiet_since >= quiet_ms
+        ):
+            return
+        step = min(_QUIET_POLL_MS, max_ms - elapsed)
+        await page.wait_for_timeout(step)
+        waited += step
+
+
+async def _scroll_pass(
+    page: Page,
+    step: int,
+    *,
+    tracker: _InflightTracker | None,
+    min_ms: float,
+    quiet_ms: float,
+    max_ms: float,
+) -> None:
     """Single top-to-bottom scroll pass.
 
-    Starts at y=0 and advances by *step* pixels per iteration, pausing
-    *pause_ms* milliseconds at each position to give the browser time to
-    decode images and fire IntersectionObserver callbacks.
+    Starts at y=0 and advances by *step* pixels per iteration. At each position
+    it waits (adaptively, see _wait_for_quiet) for the requests the scroll
+    triggered, capped at *max_ms*.
     """
     await page.evaluate("window.scrollTo(0, 0)")
     y = 0
-    while True:
+    for _ in range(_MAX_SCROLL_STEPS):
         total_height: int = await page.evaluate("document.body.scrollHeight")
         if y >= total_height:
-            break
+            return
         await page.evaluate(f"window.scrollTo(0, {y})")
-        await page.wait_for_timeout(pause_ms)
+        await _wait_for_quiet(
+            page, tracker, min_ms=min_ms, quiet_ms=quiet_ms, max_ms=max_ms
+        )
         y += step
+    logger.warning("scroll pass stopped after %d steps", _MAX_SCROLL_STEPS)
 
 
 async def _scroll_to_trigger_lazy(
@@ -834,19 +1022,21 @@ async def _scroll_to_trigger_lazy(
     viewport_height: int,
     *,
     has_lazy_content: bool,
+    tracker: _InflightTracker | None = None,
 ) -> None:
     """Scroll the page twice to ensure all lazy-loaded content is captured.
 
-    Pass 1 (slow) — triggers lazy-load initiation.
-    Interlude — wait + non-fatal networkidle probe so newly loaded content has
+    Pass 1 — triggers lazy-load initiation.
+    Interlude — wait for the triggered requests so newly loaded content has
                 time to render before the second pass.
-    Pass 2 (fast) — content is loaded; ensures everything is in view before the
-                final screenshot.
+    Pass 2 — content is loaded; ensures everything is in view before the final
+             screenshot.
 
     When *has_lazy_content* is False (no lazy markers detected on the page) the
-    much shorter "fast" timing profile is used — the generous pauses only exist
-    to trigger lazy loads, and content readiness is still guaranteed afterwards
-    by the adaptive _decode_visible_images / _wait_for_dom_stability checks.
+    shorter "fast" caps are used. Either way every pause is adaptive: it ends
+    once the page's tracked requests have gone quiet, and content readiness is
+    still guaranteed afterwards by _decode_visible_images /
+    _wait_for_dom_stability.
 
     Step size is half the viewport height (min 300 px) so IntersectionObserver
     elements with any rootMargin are not skipped between jumps.
@@ -857,45 +1047,76 @@ async def _scroll_to_trigger_lazy(
         pass2_ms = _SCROLL_PAUSE_LAZY_PASS2_MS
         settle_ms = _SETTLE_PROBE_LAZY_MS
         networkidle_ms = _NETWORKIDLE_PROBE_LAZY_MS
+        pass1_min_ms = _STEP_MIN_LAZY_PASS1_MS
     else:
         pass1_ms = _SCROLL_PAUSE_FAST_PASS1_MS
         pass2_ms = _SCROLL_PAUSE_FAST_PASS2_MS
         settle_ms = _SETTLE_PROBE_FAST_MS
         networkidle_ms = _NETWORKIDLE_PROBE_FAST_MS
+        pass1_min_ms = _STEP_MIN_FAST_PASS1_MS
+
+    async def settle() -> None:
+        await _wait_for_quiet(
+            page,
+            tracker,
+            min_ms=_SETTLE_MIN_MS,
+            quiet_ms=_SETTLE_QUIET_MS,
+            max_ms=settle_ms + networkidle_ms,
+        )
 
     # Pass 1: trigger lazy-load
-    await _scroll_pass(page, step, pause_ms=pass1_ms)
+    await _scroll_pass(
+        page,
+        step,
+        tracker=tracker,
+        min_ms=pass1_min_ms,
+        quiet_ms=_STEP_QUIET_MS,
+        max_ms=pass1_ms,
+    )
 
     # Wait for triggered content to load
-    await page.wait_for_timeout(settle_ms)
-    try:
-        await page.wait_for_load_state("networkidle", timeout=networkidle_ms)
-    except Exception:
-        pass
+    await settle()
 
     # Pass 2: content is loaded — ensure everything rendered
-    await _scroll_pass(page, step, pause_ms=pass2_ms)
+    await _scroll_pass(
+        page,
+        step,
+        tracker=tracker,
+        min_ms=_STEP_MIN_PASS2_MS,
+        quiet_ms=_STEP_QUIET_PASS2_MS,
+        max_ms=pass2_ms,
+    )
 
     # Settle at bottom, then scroll back to top
     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    await page.wait_for_timeout(settle_ms)
-    try:
-        await page.wait_for_load_state("networkidle", timeout=networkidle_ms)
-    except Exception:
-        pass
+    await settle()
     await page.evaluate("window.scrollTo(0, 0)")
-    await page.wait_for_timeout(min(settle_ms, _SETTLE_PROBE_FAST_MS * 2))
+    await _wait_for_quiet(
+        page,
+        tracker,
+        min_ms=_SETTLE_MIN_MS,
+        quiet_ms=_STEP_QUIET_MS,
+        max_ms=min(settle_ms, _SETTLE_PROBE_FAST_MS * 2),
+    )
 
 
-async def _stabilize_page(
+async def _prepare_and_scroll(
     page: Page,
     viewport_height: int,
     settle_timeout_ms: int,
     *,
-    allow_interactive_ready_state: bool = False,
+    tracker: _InflightTracker | None = None,
 ) -> None:
+    """Trigger lazy content and scroll the page through once (no readiness
+    verdict). Never raises PageStabilizationTimeoutError, so a readiness retry
+    can always run on an already scrolled page."""
     await page.evaluate(_JS_HIDE_OVERLAYS)
-    await _wait_for_fonts(page, min(settle_timeout_ms, 5000))
+    await page.evaluate(_JS_PAUSE_VIDEOS)
+    try:
+        await _wait_for_fonts(page, min(settle_timeout_ms, 5000))
+    except PageStabilizationTimeoutError:
+        # Fonts are awaited again in _finalize_readiness, which owns the verdict.
+        logger.debug("fonts not ready before scrolling — continuing")
 
     # Detect lazy markers BEFORE triggering, since _JS_TRIGGER_LAZY consumes
     # them (swaps data-src→src, strips lazy classes). Pages with no lazy content
@@ -914,8 +1135,20 @@ async def _stabilize_page(
         page,
         viewport_height,
         has_lazy_content=has_lazy_content,
+        tracker=tracker,
     )
+    await page.evaluate(_JS_PAUSE_VIDEOS)
 
+
+async def _finalize_readiness(
+    page: Page,
+    settle_timeout_ms: int,
+    *,
+    allow_interactive_ready_state: bool = False,
+) -> None:
+    """Final readiness verdict: re-trigger lazy content, then wait for fonts,
+    visible images and a stable DOM. Raises PageStabilizationTimeoutError /
+    PageAssetLoadError when the page does not get there in time."""
     await page.evaluate(_JS_TRIGGER_LAZY)
     await page.evaluate(_JS_FORCE_WP_ROCKET_LAZY_RENDER)
     await page.evaluate(_JS_NORMALIZE_FIXED_BACKGROUNDS)
@@ -944,6 +1177,30 @@ async def _stabilize_page(
 # ---------------------------------------------------------------------------
 
 
+async def open_capture_context(
+    browser: Browser, viewport: dict[str, int]
+) -> BrowserContext:
+    """New isolated browser context with the capture defaults: *viewport*,
+    reduced motion and the IntersectionObserver override."""
+    context = await browser.new_context(
+        viewport={"width": viewport["width"], "height": viewport["height"]},
+        reduced_motion="reduce",
+    )
+    try:
+        await context.add_init_script(_JS_IO_OVERRIDE)
+    except BaseException:
+        await context.close()
+        raise
+    return context
+
+
+async def _prepare_unstable_capture(page: Page) -> None:
+    """Best-effort cleanup before capturing a page whose DOM never settled."""
+    await page.evaluate(_JS_HIDE_OVERLAYS)
+    await page.evaluate(_JS_NORMALIZE_FIXED_BACKGROUNDS)
+    await page.wait_for_timeout(300)
+
+
 async def _do_capture(
     browser: Browser,
     url: str,
@@ -951,12 +1208,17 @@ async def _do_capture(
     config: EffectiveConfig,
     *,
     retry: bool = False,
+    context: BrowserContext | None = None,
 ) -> CaptureOutcome:
-    """Open a fresh browser context, navigate, apply page transforms, and return
-    PNG/JPEG bytes and the duration from page.goto → page.screenshot.
+    """Navigate, apply page transforms, and return PNG/JPEG bytes and the
+    duration from page.goto → page.screenshot.
 
-    A new context is created for every call so cookies/localStorage never
-    leak between screenshots.  The context is always closed in the finally block.
+    By default a new context is created for the call so cookies/localStorage
+    never leak between screenshots, and it is closed in the finally block. When
+    a shared *context* is passed (per-URL context reuse, see
+    open_capture_context) only a new page is opened in it, sized to *viewport*
+    before navigation, and only that page is closed — the context's HTTP cache
+    then serves the other viewports of the same URL.
 
     Duration intentionally excludes:
     - browser.new_context() / context.close() overhead
@@ -964,20 +1226,25 @@ async def _do_capture(
     - retry sleep time
     - DB write time
     """
-    context = await browser.new_context(
-        viewport={"width": viewport["width"], "height": viewport["height"]},
-        reduced_motion="reduce",
-    )
-    await context.add_init_script(_JS_IO_OVERRIDE)
+    own_context = context is None
+    if context is None:
+        context = await open_capture_context(browser, viewport)
+    page: Page | None = None
     try:
         page = await context.new_page()
+        if not own_context:
+            await page.set_viewport_size(
+                {"width": viewport["width"], "height": viewport["height"]}
+            )
         captured_with_unstable_dom = False
         warning_message: str | None = None
         network_diagnostics = NetworkDiagnostics()
         page.on("requestfailed", network_diagnostics.record_failed_request)
         page.on("response", network_diagnostics.record_response)
+        tracker = _InflightTracker()
+        tracker.attach(page)
 
-        t_start = time.monotonic()  # start: right before navigation
+        t_start = _clock()  # start: right before navigation
         # Try navigation conditions heaviest → lightest. A goto timeout on a
         # heavier condition (e.g. `load` blocked on a slow third-party
         # subresource) is non-fatal: fall through to a lighter one. Only a
@@ -1000,21 +1267,49 @@ async def _do_capture(
                     nav_chain[index + 1],
                 )
 
-        # Non-fatal networkidle probe — same pattern as _scroll_to_trigger_lazy().
-        # Gives JS-heavy pages a chance to settle without blocking on widgets.
-        try:
-            await page.wait_for_load_state("networkidle", timeout=5000)
-        except Exception:
-            logger.debug("networkidle probe timed out for %s — continuing", url)
+        # Let the page's own post-load requests (xhr/fetch included) settle
+        # before stabilization. Replaces a blind networkidle probe that cost its
+        # full 5 s on pages that never go idle (analytics, long-polling).
+        await _wait_for_quiet(
+            page,
+            tracker,
+            min_ms=0,
+            quiet_ms=_POST_GOTO_QUIET_MS,
+            max_ms=_POST_GOTO_QUIET_CAP_MS,
+            include_data=True,
+        )
 
         settle_timeout_ms = _stabilization_timeout_ms(config, retry=retry)
+        allow_interactive = nav_wait_until == "domcontentloaded"
         try:
-            await _stabilize_page(
-                page,
-                viewport["height"],
-                settle_timeout_ms,
-                allow_interactive_ready_state=nav_wait_until == "domcontentloaded",
+            await _prepare_and_scroll(
+                page, viewport["height"], settle_timeout_ms, tracker=tracker
             )
+            try:
+                await _finalize_readiness(
+                    page,
+                    settle_timeout_ms,
+                    allow_interactive_ready_state=allow_interactive,
+                )
+            except PageStabilizationTimeoutError:
+                if retry:
+                    raise
+                # Second chance on the same, already navigated and scrolled page
+                # with the longer retry window — far cheaper than the full
+                # re-navigation + re-scroll of a fresh retry.
+                second_chance_ms = _stabilization_timeout_ms(config, retry=True)
+                logger.warning(
+                    "stabilization timed out for %s (settle_timeout_ms=%d), "
+                    "re-checking readiness in place (settle_timeout_ms=%d)",
+                    url,
+                    settle_timeout_ms,
+                    second_chance_ms,
+                )
+                await _finalize_readiness(
+                    page,
+                    second_chance_ms,
+                    allow_interactive_ready_state=allow_interactive,
+                )
         except PageAssetLoadError as exc:
             message = _append_network_diagnostics(str(exc), network_diagnostics)
             logger.warning(
@@ -1026,28 +1321,17 @@ async def _do_capture(
             )
             raise PageAssetLoadError(message) from exc
         except PageStabilizationTimeoutError:
-            if not retry:
-                logger.warning(
-                    "stabilization timed out for %s (retry=%s settle_timeout_ms=%d)",
-                    url,
-                    retry,
-                    settle_timeout_ms,
-                )
-                raise
             captured_with_unstable_dom = True
             warning_message = (
                 "Captured with unstable DOM after stabilization timeout. "
                 "Content may be incomplete or still settling."
             )
             logger.warning(
-                "capturing %s with unstable DOM after retry stabilization timeout "
-                "(settle_timeout_ms=%d)",
+                "capturing %s with unstable DOM after stabilization timeout (retry=%s)",
                 url,
-                settle_timeout_ms,
+                retry,
             )
-            await page.evaluate(_JS_HIDE_OVERLAYS)
-            await page.evaluate(_JS_NORMALIZE_FIXED_BACKGROUNDS)
-            await page.wait_for_timeout(300)
+            await _prepare_unstable_capture(page)
 
         shot_kwargs: dict = {
             "full_page": True,
@@ -1060,9 +1344,10 @@ async def _do_capture(
         if config.fmt == "jpeg":
             shot_kwargs["quality"] = config.quality
 
+        await page.evaluate(_JS_PAUSE_VIDEOS)
         await page.evaluate(_JS_NORMALIZE_FIXED_BACKGROUNDS)
         data = await page.screenshot(**shot_kwargs)
-        duration = round(time.monotonic() - t_start, 3)  # stop: right after screenshot
+        duration = round(_clock() - t_start, 3)  # stop: right after screenshot
         return CaptureOutcome(
             data=data,
             duration=duration,
@@ -1070,7 +1355,10 @@ async def _do_capture(
             warning_message=warning_message,
         )
     finally:
-        await context.close()
+        if own_context:
+            await context.close()
+        elif page is not None:
+            await page.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1088,12 +1376,17 @@ async def capture_screenshot(
     viewport: dict[str, int],
     config: EffectiveConfig,
     existing: Screenshot | None = None,
+    context: BrowserContext | None = None,
 ) -> Screenshot:
     """Take a screenshot (with one retry on failure), save to disk, write DB record.
 
-    Concurrency is controlled by the caller. duration_seconds measures
-    page.goto → page.screenshot only — context setup/teardown and DB write
-    are excluded.
+    Concurrency is controlled by the caller. For an ``ok`` row duration_seconds
+    measures page.goto → page.screenshot only — context setup/teardown and DB
+    write are excluded; for a ``failed`` row it is the wall time spent across
+    all attempts (retry sleep excluded).
+
+    When *context* is given the first attempt opens its page in that shared
+    context; a retry always runs in a fresh isolated context.
 
     When *existing* is provided the same DB row is updated in place (re-capture)
     instead of inserting a new record. The file on disk is overwritten at the
@@ -1104,6 +1397,7 @@ async def capture_screenshot(
     height = viewport["height"]
     last_error: Exception | None = None
     duration = 0.0
+    attempts_seconds = 0.0
     data: bytes = b""
     captured_with_unstable_dom = False
     warning_message: str | None = None
@@ -1121,6 +1415,7 @@ async def capture_screenshot(
             )
             await asyncio.sleep(_RETRY_DELAY_S)
 
+        attempt_started = _clock()
         try:
             outcome = await _do_capture(
                 browser,
@@ -1128,13 +1423,8 @@ async def capture_screenshot(
                 viewport,
                 config,
                 retry=attempt > 0,
+                context=context if attempt == 0 else None,
             )
-            data = outcome.data
-            duration = outcome.duration
-            captured_with_unstable_dom = outcome.captured_with_unstable_dom
-            warning_message = outcome.warning_message
-            last_error = None
-            break
         except PageStabilizationTimeoutError as exc:
             last_error = exc
             logger.warning(
@@ -1181,6 +1471,18 @@ async def capture_screenshot(
                 type(exc).__name__,
                 exc,
             )
+        else:
+            data = outcome.data
+            duration = outcome.duration
+            captured_with_unstable_dom = outcome.captured_with_unstable_dom
+            warning_message = outcome.warning_message
+            last_error = None
+            break
+        finally:
+            attempts_seconds += _clock() - attempt_started
+
+    if last_error is not None:
+        duration = round(attempts_seconds, 3)
 
     # Build storage path and signed access URL
     relative_path = build_file_path(

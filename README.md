@@ -33,13 +33,15 @@ docker compose -f compose.yml -f compose.prod.yml up -d --build
 | `CORS_ALLOWED_ORIGINS` | Comma-separated allowed origins |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT lifetime (default 1440) |
 | `ACCESS_TOKEN_COOKIE_SECURE` | Set `true` in production (HTTPS) |
-| `SEM_LIMIT` | Worker concurrency (default 10) |
+| `SEM_LIMIT` | Pages captured at once per worker, shared by all running tasks and re-captures (default 4) |
+| `WORKER_MAX_JOBS` | Tasks/re-captures a worker runs at once — ARQ `max_jobs`, needs a worker restart (default 10) |
+| `REUSE_BROWSER_CONTEXT` | Capture all viewports of a URL through one shared browser context (default `true`; editable in Global Settings) |
 | `DEV_API_PORT` / `DEV_FRONTEND_PORT` | Dev host port mappings |
 | `PROD_HTTP_PORT` | Production web port (default 80) |
 | `DATA_DIR` | Screenshot storage path (default `data`) |
 | `TASK_JOB_TIMEOUT_SECONDS` | ARQ screenshot task timeout in seconds (default 7200) |
 | `BROWSER_WS_ENDPOINT` | Remote browser server **base host without a port** (e.g. `ws://browser`); the worker appends the per-browser port. Empty = launch browsers locally (needs `playwright install`). See **Remote browser server** below. |
-| `BROWSER_WS_PATH` | Shared-secret WebSocket path — must match the browser host's value |
+| `BROWSER_WS_PATH` | WebSocket path of the browser servers — must match the browser host's value (not a secret, see **Remote browser server**) |
 | `BROWSER_CONNECT_TIMEOUT_MS` | Timeout for connecting to the remote browser (default 30000) |
 
 ## Project Structure
@@ -103,10 +105,9 @@ Chrome/Edge).
 > client/server mismatch; the sibling's `CHROMIUM_ARGS` mirror `_CHROMIUM_LAUNCH_ARGS` minus
 > `--disable-dev-shm-usage` (its container runs with `ipc: host`).
 >
-> **Security:** the browser servers' only authentication is the shared-secret
-> `BROWSER_WS_PATH` — set the same long random value in both `.env` files, and restrict
-> ports 3000–3004 to the app host via private network / firewall / VPC; never expose them
-> publicly.
+> **Security:** the browser servers have no authentication, and `BROWSER_WS_PATH` is
+> not a secret (each server answers `GET /json` with it). Restrict ports 3000–3004 to the
+> app host via private network / firewall / VPC; never expose them publicly.
 >
 > **Image size:** the branded Chrome + Edge channels add ~1–1.5 GB to that image.
 >

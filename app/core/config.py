@@ -51,14 +51,23 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_COOKIE_SAMESITE: Literal["lax", "strict", "none"] = "lax"
     CORS_ALLOWED_ORIGINS: str = _DEFAULT_CORS_ALLOWED_ORIGINS
     DATA_DIR: str = "data"
+    # Max pages captured at once by one worker process — shared by all running
+    # tasks and re-captures (app.tasks.limiter.CaptureLimiter).
     SEM_LIMIT: int = 4
+    # ARQ max_jobs: tasks/re-captures a worker runs at once. Read at worker boot
+    # (restart to apply). Page concurrency is bounded by SEM_LIMIT regardless.
+    WORKER_MAX_JOBS: int = 10
+    # Capture all viewports of one URL in one browser through a shared browser
+    # context (shared HTTP cache, cookies, localStorage). Retries always use a
+    # fresh isolated context.
+    REUSE_BROWSER_CONTEXT: bool = True
     # Base host of the remote browser server, WITHOUT a port (e.g. "ws://browser"
     # in dev, "ws://10.0.0.5" in prod). The worker appends the per-browser port
     # (3000-3004, see worker._BROWSER_WS_PORTS) and connects there instead of
     # launching locally. Empty = launch locally (requires `playwright install`);
     # keeps tests and non-Docker dev working.
     BROWSER_WS_ENDPOINT: str = ""
-    # Shared-secret WebSocket path for the remote browser server. Must match the
+    # WebSocket path of the remote browser server. Must match the
     # BROWSER_WS_PATH env of the browser container (browser-server.mjs in the
     # sibling repo everneu-screenshots-browsers). The worker appends it to the
     # endpoint URL; empty = root path "/".
@@ -86,7 +95,7 @@ class Settings(BaseSettings):
         if parts.path.strip("/") or parts.query or parts.fragment:
             raise ValueError(
                 "BROWSER_WS_ENDPOINT must not contain a path or query "
-                f"(got {v!r}); set the shared-secret path via BROWSER_WS_PATH"
+                f"(got {v!r}); set the ws path via BROWSER_WS_PATH"
             )
         return v
 

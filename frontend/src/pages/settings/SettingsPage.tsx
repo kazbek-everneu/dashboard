@@ -30,6 +30,7 @@ const schema = z.object({
   // Workers & performance
   sem_limit: z.number().int().min(1).max(64),
   task_job_timeout_seconds: z.number().int().min(1),
+  reuse_browser_context: z.boolean(),
   // Security & sessions
   access_token_expire_minutes: z.number().int().min(1),
   password_reset_token_expire_minutes: z.number().int().min(1),
@@ -96,6 +97,7 @@ export function SettingsPage() {
       screenshot_quality: 85,
       sem_limit: 4,
       task_job_timeout_seconds: 7200,
+      reuse_browser_context: true,
       access_token_expire_minutes: 2880,
       password_reset_token_expire_minutes: 30,
       password_reset_rate_limit_max: 5,
@@ -110,6 +112,7 @@ export function SettingsPage() {
 
   const screenshotFormat = watch("screenshot_format")
   const smtpUseTls = watch("smtp_use_tls")
+  const reuseBrowserContext = watch("reuse_browser_context")
 
   useEffect(() => {
     if (!data) return
@@ -193,17 +196,28 @@ export function SettingsPage() {
           <NumberField
             name="sem_limit"
             label="Concurrent captures (SEM_LIMIT)"
-            hint="Parallel screenshot captures per worker. Applies to new tasks."
+            hint="Parallel screenshot captures per worker, shared by all running tasks and re-captures. Applies when the next task or re-capture starts."
             register={register}
             errors={errors}
           />
           <NumberField
             name="task_job_timeout_seconds"
             label="Task job timeout (seconds)"
-            hint="Applies to new tasks. Raising it above the .env value still needs a worker restart (ARQ hard ceiling)."
+            hint="Applies to new tasks. Raising it above the .env value still needs a worker restart (ARQ hard ceiling). Time spent waiting for a free capture slot counts too."
             register={register}
             errors={errors}
           />
+          <FormField hint="Captures all viewports of a URL in one browser through a shared context: a warm HTTP cache and fewer repeated downloads, but cookies and localStorage carry over between those viewports. Retries always use a fresh isolated context. Applies to new tasks.">
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={reuseBrowserContext}
+                onCheckedChange={(checked: boolean) =>
+                  setValue("reuse_browser_context", checked)
+                }
+              />
+              <Label>Reuse browser context across viewports</Label>
+            </div>
+          </FormField>
         </div>
 
         {/* ─── Security & Sessions ─────────────────────────────────── */}

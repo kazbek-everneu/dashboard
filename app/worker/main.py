@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import settings
 from app.core.redis import close_redis_pool, get_redis_settings
+from app.tasks.limiter import CaptureLimiter
 from app.tasks.worker import (
     recapture_screenshot,
     reset_orphaned_recapturing,
@@ -24,6 +25,10 @@ async def startup(ctx: dict) -> None:
         settings.DATABASE_URL,
         pool_pre_ping=True,
     )
+    # One limiter for every job in this worker process: SEM_LIMIT bounds the
+    # pages open on the browser host across all tasks and re-captures. Each
+    # job resizes it to the current (DB-overridable) sem_limit when it starts.
+    ctx["capture_limiter"] = CaptureLimiter(settings.SEM_LIMIT)
     logger.info("Worker started, DB engine created")
     # Recover any recapture left mid-flight by a previous crash/redeploy so its
     # row never stays stuck in "recapturing".
@@ -43,6 +48,6 @@ class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = get_redis_settings()
-    max_jobs = 10
+    max_jobs = settings.WORKER_MAX_JOBS
     job_timeout = settings.TASK_JOB_TIMEOUT_SECONDS
     allow_abort_jobs = True

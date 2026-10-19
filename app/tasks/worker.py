@@ -13,9 +13,14 @@ from app.auth.models import User  # noqa: F401 — required for SQLAlchemy FK re
 from app.core.config import settings
 from app.projects.models import ProjectConfig, ViewportEntry
 from app.screenshots.models import Screenshot
-from app.screenshots.service import EffectiveConfig, capture_screenshot
+from app.screenshots.service import (
+    EffectiveConfig,
+    capture_screenshot,
+    open_capture_context,
+)
 from app.screenshots.storage import build_file_path, generate_signed_url
 from app.settings.service import get_application_settings, resolve_setting
+from app.tasks.limiter import CaptureLimiter
 from app.tasks.models import Task
 from app.tasks.service import _clear_user_cancel_marker, is_user_cancel_requested
 
@@ -104,7 +109,7 @@ async def _launch_browser(pw: Any, browser_name: str) -> Any:
 
     When ``BROWSER_WS_ENDPOINT`` is set (a base host like ``ws://browser``),
     connect to the per-browser ``launchServer`` on the remote browser host: the
-    port is resolved from ``_BROWSER_WS_PORTS``, the shared-secret
+    port is resolved from ``_BROWSER_WS_PORTS``, the
     ``BROWSER_WS_PATH`` is appended, and the channel + launch args are already
     baked into that server, so chrome/msedge render via their real branded
     binaries. Connection is retried a few times (the server may still be
@@ -144,14 +149,47 @@ async def _launch_browser(pw: Any, browser_name: str) -> Any:
     return await bt.launch(**launch_kwargs)
 
 
+def _capture_limiter(ctx: dict, sem_limit: int) -> CaptureLimiter:
+    """The worker-wide capture limiter from the ARQ ctx, resized to *sem_limit*.
+
+    Falls back to a job-local limiter when the job runs without the worker's
+    startup hook (unit tests).
+    """
+    limiter = ctx.get("capture_limiter")
+    if limiter is None:
+        limiter = CaptureLimiter(sem_limit)
+    limiter.set_limit(sem_limit)
+    return limiter
+
+
+def _group_combos(
+    combos: list[tuple[str, dict, str]],
+) -> list[tuple[str, str, list[dict]]]:
+    """Group combos into (url, browser, [viewports]) in first-seen order."""
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for url, viewport, browser_name in combos:
+        groups.setdefault((url, browser_name), []).append(viewport)
+    return [(url, browser, vps) for (url, browser), vps in groups.items()]
+
+
+async def _close_quietly(context: Any | None) -> None:
+    if context is None:
+        return
+    try:
+        await context.close()
+    except Exception as exc:
+        logger.debug("browser context close failed: %s", exc)
+
+
 async def run_screenshot_task(ctx: dict, task_id: str) -> None:
     """ARQ job: run all screenshots for a task concurrently.
 
     Steps:
     1. Load Task + ProjectConfig; mark task as "running".
-    2. Build flat (url x viewport) combination list.
-    3. Launch Playwright browser.
-    4. Run all combinations concurrently under a per-job Semaphore.
+    2. Build flat (url x viewport x browser) combination list.
+    3. Launch Playwright browser(s).
+    4. Run the combinations through a consumer pool; every capture holds a slot
+       of the worker-wide CaptureLimiter, so concurrent tasks share SEM_LIMIT.
     5. Write progress to DB after each screenshot.
     6. Set final task status and completed_at.
     """
@@ -204,6 +242,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
         job_timeout_seconds = max(
             int(resolve_setting(app_settings, "task_job_timeout_seconds")), 0
         )
+        reuse_context = bool(resolve_setting(app_settings, "reuse_browser_context"))
         viewports: list[dict] = task.override_viewports or config.viewports
 
         # Build the flat (url, viewport, browser) combination list.
@@ -245,8 +284,16 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
         task_id, total, sorted(unique_browsers),
     )
 
+    limiter = _capture_limiter(ctx, sem_limit)
+    # Queue items are (url, browser, [viewports]). With context reuse all
+    # viewports of one URL in one browser form a group that shares a browser
+    # context (and its HTTP cache); otherwise every combo is its own group.
+    if reuse_context:
+        work_items = _group_combos(combos)
+    else:
+        work_items = [(url, browser, [vp]) for url, vp, browser in combos]
     worker_count = sem_limit
-    queue: asyncio.Queue[tuple[str, dict, str] | None] = asyncio.Queue(
+    queue: asyncio.Queue[tuple[str, str, list[dict]] | None] = asyncio.Queue(
         maxsize=max(sem_limit * 2, 1)
     )
     progress_done = 0
@@ -449,11 +496,14 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                 return None
             return browser_instances[browser_name]
 
-    async def _run_one(url: str, viewport: dict, browser_name: str) -> None:
+    async def _capture_one(
+        url: str,
+        viewport: dict,
+        browser_name: str,
+        browser: Any,
+        context: Any | None,
+    ) -> str:
         nonlocal progress_done, progress_failed
-        browser = await _ensure_browser(browser_name)
-        if browser is None:
-            return
         combo_config = EffectiveConfig(
             browser=browser_name,
             fmt=effective.fmt,
@@ -471,6 +521,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                 url=url,
                 viewport=viewport,
                 config=combo_config,
+                context=context,
             )
 
         async with counter_lock:
@@ -498,28 +549,68 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
             browser_name,
             result.status,
         )
+        return result.status
+
+    async def _run_group(url: str, browser_name: str, group: list[dict]) -> None:
+        context: Any | None = None
+        context_browser: Any | None = None
+        try:
+            for viewport in group:
+                async with limiter.slot():
+                    # Re-check after the wait: a slot can free up long after the
+                    # task was cancelled or lost its browser.
+                    if (
+                        browser_connection_lost
+                        or is_cancelled
+                        or await _refresh_cancelled_status()
+                    ):
+                        return
+                    browser = await _ensure_browser(browser_name)
+                    if browser is None:
+                        return
+                    if reuse_context and context_browser is not browser:
+                        # First viewport, or the browser reconnected under a
+                        # now-dead context.
+                        await _close_quietly(context)
+                        context = context_browser = None
+                        try:
+                            context = await open_capture_context(browser, viewport)
+                            context_browser = browser
+                        except Exception as exc:
+                            logger.warning(
+                                "task=%s shared context failed for %s %s, "
+                                "capturing in an isolated context: %s",
+                                task_id, browser_name, url, exc,
+                            )
+                    status = await _capture_one(
+                        url, viewport, browser_name, browser, context
+                    )
+                    if context is not None and status != "ok":
+                        # The failure may have left the shared context broken;
+                        # the next viewport starts from a fresh one.
+                        await _close_quietly(context)
+                        context = context_browser = None
+        finally:
+            await _close_quietly(context)
 
     async def _producer() -> None:
         nonlocal is_cancelled
-        for combo in combos:
+        for item in work_items:
             if is_cancelled:
                 break
-            await queue.put(combo)
+            await queue.put(item)
         for _ in range(worker_count):
             await queue.put(None)
 
     async def _consumer() -> None:
-        nonlocal is_cancelled
         while True:
             item = await queue.get()
             try:
                 if item is None:
                     return
-                if browser_connection_lost:
+                if browser_connection_lost or is_cancelled:
                     continue
-                if is_cancelled or await _refresh_cancelled_status():
-                    continue
-                await _run_one(*item)
+                await _run_group(*item)
             finally:
                 queue.task_done()
 
@@ -727,6 +818,7 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
             return
 
         app_settings = await get_application_settings(session)
+        sem_limit = max(int(resolve_setting(app_settings, "sem_limit")), 1)
 
         task_id = task.id
         project_id = task.project_id
@@ -766,8 +858,11 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
         await _recompute_task_progress(engine, task_id)
 
     recapture_timeout = settings.SCREENSHOT_RECAPTURE_TIMEOUT_SECONDS
+    limiter = _capture_limiter(ctx, sem_limit)
     try:
-        async with async_playwright() as pw:
+        # Take the worker-wide capture slot before connecting, so a burst of
+        # re-captures queues here instead of piling pages onto the browser host.
+        async with limiter.slot(), async_playwright() as pw:
             browser = await _launch_browser(pw, browser_name)
             try:
                 async with AsyncSession(engine) as session:
