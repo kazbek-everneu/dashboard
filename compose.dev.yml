@@ -1,0 +1,69 @@
+services:
+  api:
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      ACCESS_TOKEN_COOKIE_NAME: access_token
+      ACCESS_TOKEN_COOKIE_SECURE: "false"
+      ACCESS_TOKEN_COOKIE_SAMESITE: lax
+      CORS_ALLOWED_ORIGINS: "http://localhost:${DEV_FRONTEND_PORT:-15173},http://127.0.0.1:${DEV_FRONTEND_PORT:-15173}"
+    ports:
+      - "${DEV_API_PORT:-18081}:8000"
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    restart: unless-stopped
+
+  worker:
+    environment:
+      BROWSER_WS_ENDPOINT: "ws://browser"   # base host; worker appends per-browser port
+      BROWSER_WS_PATH: "${BROWSER_WS_PATH:-}"   # shared-secret ws path; must match browser
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    depends_on:
+      browser:
+        condition: service_healthy   # launchServers take a few seconds; connect() doesn't retry refused sockets
+    restart: unless-stopped
+
+  browser:
+    build:
+      # Sibling repo — clone everneu-screenshots-browsers next to this one.
+      context: ../everneu-screenshots-browsers
+    init: true        # reap zombie browser processes
+    ipc: host         # shares the host's /dev/shm with chromium; avoids OOM on big pages
+    environment:
+      BROWSER_WS_PATH: "${BROWSER_WS_PATH:-}"
+    expose:           # chromium 3000, chrome 3001, msedge 3002, firefox 3003, webkit 3004
+      - "3000"
+      - "3001"
+      - "3002"
+      - "3003"
+      - "3004"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+    environment:
+      VITE_API_URL: "http://localhost:${DEV_API_PORT:-18081}"
+    ports:
+      - "${DEV_FRONTEND_PORT:-15173}:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    restart: unless-stopped
+
+  db:
+    ports:
+      - "${DEV_DB_PORT:-15432}:5432"
+    restart: unless-stopped
+
+  redis:
+    ports:
+      - "${DEV_REDIS_PORT:-16379}:6379"
+    restart: unless-stopped
+
+volumes:
+  frontend_node_modules:

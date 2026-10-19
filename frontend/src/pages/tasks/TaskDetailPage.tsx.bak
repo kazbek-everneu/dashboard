@@ -1,0 +1,288 @@
+import { useState } from "react"
+import { useParams, useNavigate, Link } from "react-router-dom"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { ArrowLeft, Square, Trash2 } from "lucide-react"
+import { toast } from "sonner"
+import { useTaskPolling } from "@/hooks/useTaskPolling"
+import { tasksApi } from "@/api/tasks"
+import { screenshotsApi } from "@/api/screenshots"
+import { formatDate, shortId, extractApiError } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
+import { Separator } from "@/components/ui/separator"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import ScreenshotsPage from "@/pages/screenshots/ScreenshotsPage"
+import type { Screenshot } from "@/types"
+
+const STATUS_BADGE_CLASS: Record<string, string> = {
+  pending:   "border-0 bg-[var(--status-pending-bg)]   text-[var(--status-pending-fg)]",
+  running:   "border-0 bg-[var(--status-running-bg)]   text-[var(--status-running-fg)]",
+  completed: "border-0 bg-[var(--status-completed-bg)] text-[var(--status-completed-fg)]",
+  failed:    "border-0 bg-[var(--status-failed-bg)]    text-[var(--status-failed-fg)]",
+  cancelled: "border-0 bg-[var(--status-cancelled-bg)] text-[var(--status-cancelled-fg)]",
+}
+
+function StatusBadge({ status }: { status: string }) {
+  return (
+    <Badge className={STATUS_BADGE_CLASS[status] ?? STATUS_BADGE_CLASS.cancelled}>
+      {status === "running" && (
+        <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-[var(--running)] shadow-[0_0_8px_var(--running-glow)] animate-pulse" />
+      )}
+      {status}
+    </Badge>
+  )
+}
+
+const ACTIVE_STATUSES = new Set(["pending", "running"])
+const DELETABLE_STATUSES = new Set(["completed", "failed", "cancelled"])
+
+function LogsTable({ screenshots }: { screenshots: Screenshot[] }) {
+  if (screenshots.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground py-12 text-center">
+        No log entries yet. They appear as screenshots are taken.
+      </div>
+    )
+  }
+
+  const sorted = [...screenshots].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  )
+
+  return (
+    <div className="border rounded-lg overflow-hidden text-xs">
+      <table className="w-full">
+        <thead className="border-b bg-muted/30">
+          <tr>
+            <th className="text-left px-3 py-2 font-medium">Time</th>
+            <th className="text-left px-3 py-2 font-medium">URL</th>
+            <th className="text-left px-3 py-2 font-medium">Viewport</th>
+            <th className="text-left px-3 py-2 font-medium">Browser</th>
+            <th className="text-left px-3 py-2 font-medium">Status</th>
+            <th className="text-left px-3 py-2 font-medium">Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((s) => (
+            <tr
+              key={s.id}
+              className={`border-b last:border-0 ${s.status === "failed" ? "bg-destructive/5" : ""}`}
+            >
+              <td className="px-3 py-2 text-muted-foreground font-mono whitespace-nowrap">
+                {formatDate(s.created_at)}
+              </td>
+              <td className="px-3 py-2 max-w-xs">
+                <span className="truncate block" title={s.url}>
+                  {s.url}
+                </span>
+                {s.status === "failed" && s.error_message && (
+                  <span className="text-destructive block mt-0.5">{s.error_message}</span>
+                )}
+              </td>
+              <td className="px-3 py-2 font-mono whitespace-nowrap">
+                {s.width}×{s.height}
+              </td>
+              <td className="px-3 py-2">{s.browser}</td>
+              <td className="px-3 py-2">
+                <Badge
+                  className={`text-xs px-1.5 py-0 border-0 ${
+                    s.status === "ok"
+                      ? "bg-[var(--status-completed-bg)] text-[var(--status-completed-fg)]"
+                      : "bg-[var(--status-failed-bg)] text-[var(--status-failed-fg)]"
+                  }`}
+                >
+                  {s.status}
+                </Badge>
+              </td>
+              <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
+                {s.duration_seconds.toFixed(1)}s
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+export default function TaskDetailPage() {
+  const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const { data: task, isLoading } = useTaskPolling(id!)
+
+  const isRunning = task && ACTIVE_STATUSES.has(task.status)
+
+  const { data: screenshots = [] } = useQuery({
+    queryKey: ["screenshots", id],
+    queryFn: () => screenshotsApi.list(id!),
+    enabled: !!id,
+    refetchInterval: isRunning ? 3000 : false,
+  })
+
+  const cancelMutation = useMutation({
+    mutationFn: () => tasksApi.cancel(id!),
+    onSuccess: (updated) => {
+      toast.success("Task cancelled.")
+      queryClient.setQueryData(["task", id], updated)
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] })
+    },
+    onError: (err: unknown) => toast.error(extractApiError(err)),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: () => tasksApi.delete(id!),
+    onSuccess: () => {
+      toast.success("Task deleted.")
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] })
+      if (task) navigate(`/projects/${task.project_id}/tasks`)
+    },
+    onError: (err: unknown) => toast.error(extractApiError(err)),
+  })
+
+  if (isLoading) return <div className="text-muted-foreground">Loading…</div>
+  if (!task) return <div className="text-destructive">Task not found.</div>
+
+  const progress =
+    task.progress_total > 0
+      ? Math.round((task.progress_done / task.progress_total) * 100)
+      : 0
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate(`/projects/${task.project_id}/tasks`)}
+              className="p-1 h-auto"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <h1 className="text-2xl font-bold font-mono">Task #{shortId(task.id)}</h1>
+            <StatusBadge status={task.status} />
+          </div>
+          <div className="ml-8 flex flex-wrap gap-4 text-xs text-muted-foreground">
+            <span>Created: {formatDate(task.created_at)}</span>
+            {task.started_at && <span>Started: {formatDate(task.started_at)}</span>}
+            {task.completed_at && <span>Completed: {formatDate(task.completed_at)}</span>}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {ACTIVE_STATUSES.has(task.status) && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => cancelMutation.mutate()}
+              disabled={cancelMutation.isPending}
+              className="text-destructive border-destructive/40 hover:bg-destructive/10"
+            >
+              <Square className="h-3.5 w-3.5 mr-1.5" />
+              {cancelMutation.isPending ? "Stopping…" : "Stop"}
+            </Button>
+          )}
+
+          {DELETABLE_STATUSES.has(task.status) && (
+            <>
+              {confirmDelete ? (
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-muted-foreground">Sure?</span>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => deleteMutation.mutate()}
+                    disabled={deleteMutation.isPending}
+                  >
+                    {deleteMutation.isPending ? "Deleting…" : "Yes, delete"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setConfirmDelete(false)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmDelete(true)}
+                  className="text-destructive hover:bg-destructive/10"
+                >
+                  <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                  Delete
+                </Button>
+              )}
+            </>
+          )}
+
+          <Link to={`/projects/${task.project_id}/tasks`}>
+            <Button variant="outline" size="sm">All tasks</Button>
+          </Link>
+        </div>
+      </div>
+
+      {/* Progress */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-sm">
+          <span className="font-medium">Progress</span>
+          <span className="text-muted-foreground">
+            {task.progress_done}/{task.progress_total}
+            {task.progress_failed > 0 && (
+              <span className="text-destructive ml-2">({task.progress_failed} failed)</span>
+            )}
+            {" — "}
+            {progress}%
+          </span>
+        </div>
+        <Progress
+          value={progress}
+          className={`h-3${task.status === "running" ? " dark:[&>div]:shadow-[0_0_10px_var(--progress-glow)]" : ""}`}
+        />
+        {task.status === "running" && (
+          <p className="text-xs text-muted-foreground">
+            Auto-refreshing every 3 seconds…
+          </p>
+        )}
+      </div>
+
+      <Separator />
+
+      {/* Tabs: Screenshots / Logs */}
+      <Tabs defaultValue="screenshots">
+        <TabsList>
+          <TabsTrigger value="screenshots">
+            Screenshots
+            {screenshots.length > 0 && (
+              <span className="ml-1.5 text-xs text-muted-foreground">({screenshots.length})</span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="logs">
+            Logs
+            {screenshots.filter((s) => s.status === "failed").length > 0 && (
+              <span className="ml-1.5 text-xs text-destructive font-medium">
+                {screenshots.filter((s) => s.status === "failed").length} errors
+              </span>
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="screenshots" className="mt-4">
+          <ScreenshotsPage taskId={task.id} screenshots={screenshots} />
+        </TabsContent>
+
+        <TabsContent value="logs" className="mt-4">
+          <LogsTable screenshots={screenshots} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
