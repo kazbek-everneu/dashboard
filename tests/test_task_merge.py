@@ -11,7 +11,7 @@ def _make_config(**kwargs) -> ProjectConfig:
     defaults = dict(
         id=uuid.uuid4(),
         project_id=uuid.uuid4(),
-        default_browsers=["chromium"],
+        default_browsers=["chrome"],
         viewports=[{"width": 1920, "height": 1080}, {"width": 390, "height": 844}],
         wait_until="load",
         timeout=30000,
@@ -44,19 +44,24 @@ class TestBuildEffectiveConfig:
         config = _make_config()
         task = _make_task()
         result = _build_effective_config(task, config, "jpeg", 85)
-        assert result.browser == "chromium"
+        assert result.browser == "chrome"
         assert result.fmt == "jpeg"
         assert result.quality == 85
         assert result.wait_until == "load"
         assert result.timeout == 30000
 
     def test_override_browser(self) -> None:
-        config = _make_config(default_browsers=["chromium"])
+        config = _make_config(default_browsers=["chrome"])
         task = _make_task(override_browser="firefox")
         assert _build_effective_config(task, config, "jpeg", 85).browser == "firefox"
 
+    def test_legacy_chromium_override_resolves_to_chrome(self) -> None:
+        config = _make_config(default_browsers=["firefox"])
+        task = _make_task(override_browser="chromium")
+        assert _build_effective_config(task, config, "jpeg", 85).browser == "chrome"
+
     def test_override_browsers_take_precedence(self) -> None:
-        config = _make_config(default_browsers=["chromium"])
+        config = _make_config(default_browsers=["chrome"])
         task = _make_task(override_browsers=["webkit", "firefox"])
         assert _build_effective_config(task, config, "jpeg", 85).browser == "webkit"
 

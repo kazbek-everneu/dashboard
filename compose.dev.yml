@@ -30,11 +30,10 @@ services:
       # Sibling repo — clone everneu-screenshots-browsers next to this one.
       context: ../everneu-screenshots-browsers
     init: true        # reap zombie browser processes
-    ipc: host         # shares the host's /dev/shm with chromium; avoids OOM on big pages
+    ipc: host         # shares the host's /dev/shm with the browsers; avoids OOM on big pages
     environment:
       BROWSER_WS_PATH: "${BROWSER_WS_PATH:-}"
-    expose:           # chromium 3000, chrome 3001, msedge 3002, firefox 3003, webkit 3004
-      - "3000"
+    expose:           # chrome 3001, msedge 3002, firefox 3003, webkit 3004
       - "3001"
       - "3002"
       - "3003"

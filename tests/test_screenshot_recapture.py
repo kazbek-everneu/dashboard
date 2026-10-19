@@ -38,7 +38,7 @@ def _project(user: User) -> Project:
 def _config(project_id: uuid.UUID) -> ProjectConfig:
     return ProjectConfig(
         project_id=project_id,
-        default_browsers=["chromium"],
+        default_browsers=["chrome"],
         viewports=[{"width": 1280, "height": 720}],
         wait_until="load",
         timeout=30000,
@@ -60,6 +60,8 @@ def _task(project: Project, user: User, **kwargs: object) -> Task:
 
 
 def _screenshot(task: Task, **kwargs: object) -> Screenshot:
+    # A legacy screenshot from the retired chromium browser: re-capture keeps its
+    # browser name (same file path) and _launch_browser serves it with chrome.
     defaults: dict[str, object] = {
         "task_id": task.id,
         "url": "https://example.com/",
@@ -285,6 +287,7 @@ async def test_worker_recaptures_in_place_and_flips_task_to_completed() -> None:
     original_created = screenshot.created_at
     session = _FakeWorkerSession(task, _config(project.id), [screenshot])
     browser = _FakeBrowser()
+    launch = AsyncMock(return_value=browser)
 
     async def fake_capture(**kwargs: object) -> Screenshot:
         existing = kwargs["existing"]
@@ -314,14 +317,12 @@ async def test_worker_recaptures_in_place_and_flips_task_to_completed() -> None:
             "app.tasks.worker.async_playwright",
             return_value=_FakePlaywrightContext(),
         ),
-        patch(
-            "app.tasks.worker._launch_browser",
-            new=AsyncMock(return_value=browser),
-        ),
+        patch("app.tasks.worker._launch_browser", new=launch),
         patch("app.tasks.worker.capture_screenshot", new=fake_capture),
     ):
         await recapture_screenshot({"db_engine": object()}, str(screenshot.id))
 
+    assert launch.await_args.args[1] == "chromium"  # aliased inside _launch_browser
     assert screenshot.id == original_id  # row updated in place
     assert screenshot.created_at != original_created  # cache-bust bump
     assert screenshot.status == "ok"

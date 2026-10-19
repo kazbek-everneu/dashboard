@@ -7,7 +7,12 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
-from app.projects.models import ProjectConfigRead
+from app.projects.models import (
+    ProjectConfig,
+    ProjectConfigRead,
+    ProjectConfigUpdate,
+    ViewportEntry,
+)
 from app.settings.models import (
     APPLICATION_SETTINGS_SINGLETON_ID,
     DEFAULT_SCREENSHOT_FORMAT,
@@ -120,7 +125,7 @@ def test_project_config_read_excludes_removed_screenshot_fields() -> None:
         {
             "id": str(uuid.uuid4()),
             "project_id": str(uuid.uuid4()),
-            "default_browsers": ["chromium"],
+            "default_browsers": ["chrome"],
             "viewports": [
                 {
                     "width": 1920,
@@ -178,3 +183,38 @@ def test_reuse_browser_context_defaults_on_and_db_override_wins() -> None:
         )
         is False
     )
+
+
+def test_project_config_defaults_to_chrome() -> None:
+    assert ProjectConfig(project_id=uuid.uuid4()).default_browsers == ["chrome"]
+
+
+def test_browser_inputs_alias_legacy_chromium_to_chrome() -> None:
+    entry = ViewportEntry(
+        width=1280, height=720, browsers=["chromium", "chrome", "firefox"]
+    )
+    update = ProjectConfigUpdate(default_browsers=["chromium"])
+    task = TaskCreate(
+        project_id=uuid.uuid4(),
+        override_browser="chromium",
+        override_browsers=["chromium", "webkit"],
+    )
+
+    assert entry.browsers == ["chrome", "firefox"]
+    assert update.default_browsers == ["chrome"]
+    assert task.override_browser == "chrome"
+    assert task.override_browsers == ["chrome", "webkit"]
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: ViewportEntry(width=1280, height=720, browsers=["netscape"]),
+        lambda: ProjectConfigUpdate(default_browsers=["netscape"]),
+        lambda: TaskCreate(project_id=uuid.uuid4(), override_browser="netscape"),
+        lambda: TaskCreate(project_id=uuid.uuid4(), override_browsers=["netscape"]),
+    ],
+)
+def test_browser_inputs_reject_unknown_names(build) -> None:
+    with pytest.raises(ValidationError, match="Unknown browser"):
+        build()

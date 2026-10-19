@@ -104,7 +104,7 @@ def _project(user: User) -> Project:
 def _config(project_id: uuid.UUID) -> ProjectConfig:
     return ProjectConfig(
         project_id=project_id,
-        default_browsers=["chromium"],
+        default_browsers=["chrome"],
         viewports=[{"width": 1280, "height": 720}],
         wait_until="load",
         timeout=30000,
@@ -595,9 +595,14 @@ async def test_worker_marks_task_timed_out_and_records_missing_screenshots() -> 
     ("browser_name", "browser_type", "expected_launch_kwargs"),
     [
         (
+            # Legacy name: the retired chromium server is served by chrome.
             "chromium",
             "chromium",
-            {"headless": True, "args": list(_CHROMIUM_LAUNCH_ARGS)},
+            {
+                "headless": True,
+                "args": list(_CHROMIUM_LAUNCH_ARGS),
+                "channel": "chrome",
+            },
         ),
         (
             "chrome",
@@ -686,7 +691,8 @@ async def test_launch_browser_launches_locally_when_endpoint_empty() -> None:
 @pytest.mark.parametrize(
     ("browser_name", "browser_type", "port"),
     [
-        ("chromium", "chromium", 3000),
+        ("chromium", "chromium", 3001),  # legacy alias for chrome
+        ("unknown", "chromium", 3001),  # unknown names fall back to chrome
         ("chrome", "chromium", 3001),
         ("msedge", "chromium", 3002),
         ("firefox", "firefox", 3003),
@@ -724,11 +730,11 @@ async def test_launch_browser_appends_shared_secret_ws_path() -> None:
         patch("app.tasks.worker.settings.BROWSER_WS_PATH", "/s3cret/"),
         patch("app.tasks.worker.settings.BROWSER_CONNECT_TIMEOUT_MS", 5000),
     ):
-        result = await _launch_browser(pw, "chromium")
+        result = await _launch_browser(pw, "chrome")
 
     assert result is browser
     assert pw.chromium.connect_calls == [
-        ("ws://browser:3000/s3cret", {"timeout": 5000})
+        ("ws://browser:3001/s3cret", {"timeout": 5000})
     ]
 
 
@@ -741,7 +747,7 @@ async def test_launch_browser_retries_connect_until_success() -> None:
         patch("app.tasks.worker.settings.BROWSER_WS_ENDPOINT", "ws://browser"),
         patch("app.tasks.worker._CONNECT_RETRY_DELAY_S", 0),
     ):
-        result = await _launch_browser(pw, "chromium")
+        result = await _launch_browser(pw, "chrome")
 
     assert result is browser
     assert len(pw.chromium.connect_calls) == 3
@@ -757,7 +763,7 @@ async def test_launch_browser_raises_after_connect_retries_exhausted() -> None:
         patch("app.tasks.worker._CONNECT_RETRY_DELAY_S", 0),
     ):
         with pytest.raises(ConnectionError):
-            await _launch_browser(pw, "chromium")
+            await _launch_browser(pw, "chrome")
 
     assert len(pw.chromium.connect_calls) == 3
 

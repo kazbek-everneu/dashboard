@@ -8,6 +8,36 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
+# ---------------------------------------------------------------------------
+# Browser names
+# ---------------------------------------------------------------------------
+
+# Browsers the remote browser server runs (see _BROWSER_WS_PORTS in
+# app/tasks/worker.py). "chromium" was retired in favour of branded Chrome; it is
+# still accepted as an alias so stored configs and old API clients keep working.
+SUPPORTED_BROWSERS: tuple[str, ...] = ("chrome", "msedge", "firefox", "webkit")
+DEFAULT_BROWSER = "chrome"
+_LEGACY_BROWSER_ALIASES: dict[str, str] = {"chromium": "chrome"}
+
+
+def normalize_browser(name: str) -> str:
+    """Map a retired browser name to its replacement (``chromium`` → ``chrome``)."""
+    return _LEGACY_BROWSER_ALIASES.get(name, name)
+
+
+def normalize_browsers(names: list[str]) -> list[str]:
+    """Apply legacy aliases and drop duplicates, keeping the first occurrence."""
+    return list(dict.fromkeys(normalize_browser(n) for n in names))
+
+
+def validate_browser_names(names: list[str]) -> list[str]:
+    """``normalize_browsers`` + reject names the browser server does not run."""
+    normalized = normalize_browsers(names)
+    for b in normalized:
+        if b not in SUPPORTED_BROWSERS:
+            raise ValueError(f"Unknown browser: {b!r}")
+    return normalized
+
 
 # ---------------------------------------------------------------------------
 # ViewportEntry — validated shape for a single viewport in the JSONB column
@@ -43,12 +73,7 @@ class ViewportEntry(BaseModel):
     @field_validator("browsers")
     @classmethod
     def validate_browsers(cls, v: list[str] | None) -> list[str] | None:
-        valid = {"chromium", "chrome", "firefox", "webkit", "msedge"}
-        if v is not None:
-            for b in v:
-                if b not in valid:
-                    raise ValueError(f"Unknown browser: {b!r}")
-        return v
+        return validate_browser_names(v) if v is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -115,8 +140,8 @@ class ProjectConfig(SQLModel, table=True):
     )
 
     default_browsers: list[Any] = Field(
-        default_factory=lambda: ["chromium"],
-        sa_column=Column(JSONB, nullable=False, server_default='["chromium"]'),
+        default_factory=lambda: [DEFAULT_BROWSER],
+        sa_column=Column(JSONB, nullable=False, server_default='["chrome"]'),
     )
     viewports: list[dict[str, Any]] = Field(
         default_factory=_default_viewports,
@@ -131,6 +156,11 @@ class ProjectConfigUpdate(SQLModel):
     viewports: list[dict[str, Any]] | None = None
     wait_until: str | None = None
     timeout: int | None = None
+
+    @field_validator("default_browsers")
+    @classmethod
+    def validate_default_browsers(cls, v: list[str] | None) -> list[str] | None:
+        return validate_browser_names(v) if v is not None else None
 
 
 class ProjectConfigRead(SQLModel):
@@ -151,7 +181,7 @@ class ProjectConfigRead(SQLModel):
             if isinstance(v, str):
                 data["default_browsers"] = [v]
             elif not v:
-                data["default_browsers"] = ["chromium"]
+                data["default_browsers"] = [DEFAULT_BROWSER]
         return data
     wait_until: str
     timeout: int

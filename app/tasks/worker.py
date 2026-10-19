@@ -11,7 +11,12 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth.models import User  # noqa: F401 — required for SQLAlchemy FK resolution
 from app.core.config import settings
-from app.projects.models import ProjectConfig, ViewportEntry
+from app.projects.models import (
+    ProjectConfig,
+    ViewportEntry,
+    normalize_browser,
+    normalize_browsers,
+)
 from app.screenshots.models import Screenshot
 from app.screenshots.service import (
     EffectiveConfig,
@@ -35,9 +40,9 @@ _CHANNEL_BROWSERS: dict[str, str] = {
 # own `launchServer` instance — see browser-server.mjs in the sibling repo
 # everneu-screenshots-browsers, which MUST keep this exact mapping (manual
 # contract, documented in both READMEs). The worker connects to
-# f"{BROWSER_WS_ENDPOINT}:{port}/".
+# f"{BROWSER_WS_ENDPOINT}:{port}/". Port 3000 (the retired chromium server) is
+# no longer used; legacy "chromium" names are aliased to chrome.
 _BROWSER_WS_PORTS: dict[str, int] = {
-    "chromium": 3000,
     "chrome": 3001,
     "msedge": 3002,
     "firefox": 3003,
@@ -74,7 +79,7 @@ def _build_effective_config(
     from global application settings. Timeout remains project-scoped.
     """
     return EffectiveConfig(
-        browser=(
+        browser=normalize_browsers(
             task.override_browsers
             or ([task.override_browser] if task.override_browser else None)
             or config.default_browsers
@@ -91,17 +96,17 @@ def _resolve_browser_type(pw: Any, browser_name: str) -> tuple[Any, str | None, 
 
     Returns ``(browser_type, channel, use_chromium_launch_args)``. Channel
     browsers (chrome/msedge) resolve to the chromium type with a ``channel``;
-    unknown names fall back to chromium.
+    unknown names fall back to chrome.
     """
     channel = _CHANNEL_BROWSERS.get(browser_name)
-    if channel or browser_name in ("chrome", "chromium"):
+    if channel:
         return pw.chromium, channel, True
     if browser_name == "firefox":
         return pw.firefox, None, False
     if browser_name == "webkit":
         return pw.webkit, None, False
-    logger.warning("unknown browser %r, falling back to chromium", browser_name)
-    return pw.chromium, None, True
+    logger.warning("unknown browser %r, falling back to chrome", browser_name)
+    return pw.chromium, _CHANNEL_BROWSERS["chrome"], True
 
 
 async def _launch_browser(pw: Any, browser_name: str) -> Any:
@@ -114,13 +119,15 @@ async def _launch_browser(pw: Any, browser_name: str) -> Any:
     baked into that server, so chrome/msedge render via their real branded
     binaries. Connection is retried a few times (the server may still be
     starting). Otherwise launch a local browser as before. Raises on
-    connect/launch failure.
+    connect/launch failure. A legacy ``chromium`` name (old screenshots being
+    re-captured) is served by chrome.
     """
+    browser_name = normalize_browser(browser_name)
     bt, channel, use_chromium_launch_args = _resolve_browser_type(pw, browser_name)
 
     base = settings.BROWSER_WS_ENDPOINT
     if base:
-        port = _BROWSER_WS_PORTS.get(browser_name, _BROWSER_WS_PORTS["chromium"])
+        port = _BROWSER_WS_PORTS.get(browser_name, _BROWSER_WS_PORTS["chrome"])
         ws_path = settings.BROWSER_WS_PATH.strip("/")
         endpoint = f"{base.rstrip('/')}:{port}/{ws_path}"
         last_exc: Exception | None = None
@@ -250,7 +257,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
         # When browsers is null/absent the project-level default browser is used.
         # Effective browser list:
         # override_browsers > legacy override_browser > project defaults.
-        task_browsers: list[str] = (
+        task_browsers: list[str] = normalize_browsers(
             task.override_browsers
             or ([task.override_browser] if task.override_browser else None)
             or config.default_browsers

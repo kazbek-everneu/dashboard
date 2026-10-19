@@ -47,7 +47,7 @@ export default function CreateTaskPage() {
   const backTo = queryProjectId ? `/projects/${queryProjectId}` : "/tasks"
 
   const [taskConfig, setTaskConfig] = useState<TaskOverrideConfig>({
-    default_browsers: ["chromium"],
+    default_browsers: ["chrome"],
     viewports: [],
   })
 

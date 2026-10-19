@@ -43,7 +43,7 @@ export default function ProjectDetailPage() {
   const queryClient = useQueryClient()
   const [editOpen, setEditOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const [defaultBrowsers, setDefaultBrowsers] = useState<string[]>(["chromium"])
+  const [defaultBrowsers, setDefaultBrowsers] = useState<string[]>(["chrome"])
   const [viewports, setViewports] = useState<ViewportConfig[]>([])
   const [waitUntil, setWaitUntil] = useState<ProjectConfig["wait_until"]>("load")
   const [timeout, setTimeout] = useState("30000")

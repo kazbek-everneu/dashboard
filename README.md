@@ -40,7 +40,7 @@ docker compose -f compose.yml -f compose.prod.yml up -d --build
 | `PROD_HTTP_PORT` | Production web port (default 80) |
 | `DATA_DIR` | Screenshot storage path (default `data`) |
 | `TASK_JOB_TIMEOUT_SECONDS` | ARQ screenshot task timeout in seconds (default 7200) |
-| `BROWSER_WS_ENDPOINT` | Remote browser server **base host without a port** (e.g. `ws://browser`); the worker appends the per-browser port. Empty = launch browsers locally (needs `playwright install`). See **Remote browser server** below. |
+| `BROWSER_WS_ENDPOINT` | Remote browser server **base host without a port** (e.g. `ws://browser`); the worker appends the per-browser port. Empty = launch browsers locally (needs `playwright install chrome`). See **Remote browser server** below. |
 | `BROWSER_WS_PATH` | WebSocket path of the browser servers — must match the browser host's value (not a secret, see **Remote browser server**) |
 | `BROWSER_CONNECT_TIMEOUT_MS` | Timeout for connecting to the remote browser (default 30000) |
 
@@ -78,11 +78,13 @@ channels — is reachable remotely:
 
 | Browser | Port | Renders with |
 |---|---|---|
-| `chromium` | 3000 | Chromium (Blink) |
-| `chrome` | 3001 | **real Google Chrome** (Blink) |
+| `chrome` | 3001 | **real Google Chrome** (Blink) — the default |
 | `msedge` | 3002 | **real Microsoft Edge** (Blink) |
 | `firefox` | 3003 | Firefox (Gecko) |
 | `webkit` | 3004 | WebKit |
+
+Port 3000 (the retired `chromium` server) is unused. `chromium` is still accepted as an
+alias of `chrome` (API input, stored configs, re-capture of old Chromium screenshots).
 
 The worker connects per browser via `BROWSER_WS_ENDPOINT` (a **base host without a port**) +
 the port above; `page.screenshot()` returns the image bytes back to the worker, which still
@@ -99,20 +101,21 @@ Chrome/Edge).
   `BROWSER_WS_PATH` in the app host's `.env`.
 
 > **Cross-repo contract (kept in sync manually — no automated check):**
-> the port map above must equal `_BROWSER_WS_PORTS` in `app/tasks/worker.py` and `SPECS` in
+> the port map above must equal `_BROWSER_WS_PORTS` in `app/tasks/worker.py` and `ALL_SPECS` in
 > the sibling repo's `browser-server.mjs`; the sibling Dockerfile's `PLAYWRIGHT_VERSION` must
 > match the `playwright` pip version in `pyproject.toml` (currently `1.58.0`) to avoid a
 > client/server mismatch; the sibling's `CHROMIUM_ARGS` mirror `_CHROMIUM_LAUNCH_ARGS` minus
 > `--disable-dev-shm-usage` (its container runs with `ipc: host`).
 >
 > **Security:** the browser servers have no authentication, and `BROWSER_WS_PATH` is
-> not a secret (each server answers `GET /json` with it). Restrict ports 3000–3004 to the
+> not a secret (each server answers `GET /json` with it). Restrict ports 3001–3004 to the
 > app host via private network / firewall / VPC; never expose them publicly.
 >
 > **Image size:** the branded Chrome + Edge channels add ~1–1.5 GB to that image.
 >
 > Local non-Docker runs with `BROWSER_WS_ENDPOINT=` empty fall back to a local `launch()` and
-> require `python -m playwright install`.
+> require `python -m playwright install chrome` (branded Google Chrome, the default browser;
+> add `msedge firefox webkit` for the others).
 
 ## API
 

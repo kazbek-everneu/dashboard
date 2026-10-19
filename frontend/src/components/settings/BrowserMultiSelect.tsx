@@ -15,7 +15,6 @@ const BROWSERS = [
   { value: "firefox", label: "Firefox" },
   { value: "webkit", label: "Safari" },
   { value: "msedge", label: "Edge" },
-  { value: "chromium", label: "Chromium" },
 ] as const
 
 function arraysEqual(a: string[], b: string[]): boolean {

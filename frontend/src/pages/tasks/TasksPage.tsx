@@ -370,7 +370,7 @@ export default function TasksPage() {
                       <SelectValue placeholder="Use project default" />
                     </SelectTrigger>
                     <SelectContent>
-                      {["chromium", "chrome", "firefox", "webkit"].map((b) => (
+                      {["chrome", "firefox", "webkit"].map((b) => (
                         <SelectItem key={b} value={b}>
                           {b}
                         </SelectItem>

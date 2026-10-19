@@ -174,8 +174,11 @@ Browsers run in a **separate container** that lives in its own **sibling repo**
 `everneu-screenshots-browsers` (clone it next to this one) — official Playwright image +
 branded Chrome/Edge, not bundled into the api/worker image. Its entrypoint
 `browser-server.mjs` starts **one `launchServer` per browser, each on its own port** —
-chromium 3000, chrome 3001, msedge 3002, firefox 3003, webkit 3004 — so all five render with
-their real engines/channels (chrome/msedge are the real branded binaries). `launchServer`
+chrome 3001, msedge 3002, firefox 3003, webkit 3004 — so all four render with their real
+engines/channels (chrome/msedge are the real branded binaries; chrome is the default). The
+`chromium` server (port 3000) is retired: `chromium` survives only as an alias of `chrome`
+(`normalize_browsers` in [projects/models.py](app/projects/models.py), applied by the input
+validators, the worker's combo list and `_launch_browser`). `launchServer`
 (not `run-server`) is required because the channel + launch args must be baked in
 server-side: `connect()` can't pass them. `_launch_browser` in
 [tasks/worker.py](app/tasks/worker.py) is the single chokepoint: when `BROWSER_WS_ENDPOINT`
@@ -190,7 +193,7 @@ READMEs): the port map is duplicated in the sibling's `browser-server.mjs` and
 `_BROWSER_WS_PORTS` — **keep them in sync**; the sibling Dockerfile's `PLAYWRIGHT_VERSION`
 **must match** the `playwright` pip version (`pyproject.toml`); its `CHROMIUM_ARGS` mirror
 `_CHROMIUM_LAUNCH_ARGS` minus `--disable-dev-shm-usage`; the servers have no auth and
-`BROWSER_WS_PATH` is not a secret (`GET /json` returns it) — firewall ports 3000–3004;
+`BROWSER_WS_PATH` is not a secret (`GET /json` returns it) — firewall ports 3001–3004;
 branded channels add ~1–1.5 GB to the image.
 
 ## Frontend conventions

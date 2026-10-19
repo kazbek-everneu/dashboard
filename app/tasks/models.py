@@ -2,10 +2,13 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from pydantic import field_validator
 from sqlalchemy import Column, ForeignKey, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
+
+from app.projects.models import validate_browser_names
 
 
 class Task(SQLModel, table=True):
@@ -64,6 +67,16 @@ class TaskCreate(SQLModel):
     override_browser: str | None = None  # legacy single-browser override
     override_browsers: list[str] | None = None
     override_viewports: list[dict[str, Any]] | None = None
+
+    @field_validator("override_browser")
+    @classmethod
+    def validate_override_browser(cls, v: str | None) -> str | None:
+        return validate_browser_names([v])[0] if v else v
+
+    @field_validator("override_browsers")
+    @classmethod
+    def validate_override_browsers(cls, v: list[str] | None) -> list[str] | None:
+        return validate_browser_names(v) if v is not None else None
 
 
 class TaskRead(SQLModel):

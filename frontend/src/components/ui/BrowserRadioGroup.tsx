@@ -3,7 +3,6 @@ import { cn } from "@/lib/utils"
 import { BrowserIcon } from "@/components/ui/BrowserIcon"
 
 const BROWSERS = [
-  { value: "chromium", label: "Chromium" },
   { value: "chrome",   label: "Chrome" },
   { value: "firefox",  label: "Firefox" },
   { value: "webkit",   label: "Safari" },
