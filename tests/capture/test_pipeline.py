@@ -229,6 +229,7 @@ async def test_run_attempt_skips_the_second_chance_without_budget() -> None:
     skipped = outcome.report.warning("recovery_skipped")
     assert skipped is not None and skipped.level == "info"
     assert skipped.details["step"] == "second_chance"
+    assert skipped.details["outcome"] == "budget"
     assert 0 < skipped.details["remaining_s"] <= 20
     assert outcome.report.meta["readiness"]["second_chance"] is False
 

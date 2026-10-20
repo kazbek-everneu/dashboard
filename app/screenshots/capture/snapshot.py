@@ -245,6 +245,14 @@ async def _retry_screenshot(
             "Screenshot retry skipped: not enough time left",
             step="screenshot_retry",
             remaining_s=round(remaining_s, 1),
+            outcome="budget",
+            samples=[
+                {
+                    "step": "screenshot_retry",
+                    "remaining_s": round(remaining_s, 1),
+                    "outcome": "budget",
+                }
+            ],
         )
         raise ScreenshotTimeoutError(
             f"Screenshot timed out after {timeout_ms} ms"

@@ -128,7 +128,10 @@ def _seconds(value: float) -> float | None:
 
 
 def _skip(run: CaptureRun, step: str, remaining_s: float, message: str, **details):
-    """Record an optional recovery step that did not run."""
+    """Record an optional recovery step that did not run (``outcome``
+    "budget", the default) or whose result was not used (a reload that was
+    "unavailable", "failed" or rendered "blank")."""
+    details.setdefault("outcome", "budget")
     logger.info("%s: %s (step=%s, %s)", run.url, message, step, details or "")
     sample = {"step": step, "remaining_s": _seconds(remaining_s), **details}
     run.report.warn(
