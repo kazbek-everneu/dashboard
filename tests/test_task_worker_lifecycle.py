@@ -1,4 +1,7 @@
 import asyncio
+import logging
+import sys
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,6 +28,7 @@ from app.tasks.worker import (
     _RECONNECT_DELAYS_S,
     _group_combos,
     _launch_browser,
+    _resolve_job_timeout,
     finish_task,
     reap_orphaned_tasks,
     run_screenshot_task,
@@ -1538,3 +1542,170 @@ async def test_launch_browser_retry_schedule_defaults_and_repeats_the_last_delay
     assert default_sleeps == [1.0, 1.0]  # today's 3 x 1 s
     assert short_sleeps == [0.5, 0.5, 0.5]
     assert len(pw.chromium.connect_calls) == 3 + 4
+
+
+# ---------------------------------------------------------------------------
+# Job timeout: min(DB, TASK_JOB_TIMEOUT_SECONDS)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("db", "env", "expected"),
+    [
+        (7200, 7200, (7200, False)),
+        (9200, 7200, (7200, False)),  # ARQ cancels at the env value anyway
+        (1800, 7200, (1800, True)),  # enforced by the run itself
+        (0, 7200, (7200, False)),
+        (1800, 0, (1800, True)),
+        (0, 0, (0, False)),
+    ],
+)
+def test_resolve_job_timeout(db: int, env: int, expected: tuple[int, bool]) -> None:
+    assert _resolve_job_timeout(db, env) == expected
+
+
+def _settings_row(**overrides: object) -> SimpleNamespace:
+    return SimpleNamespace(screenshot_format="jpeg", screenshot_quality=85, **overrides)
+
+
+def _record(task: Task, kwargs: dict[str, object]) -> Screenshot:
+    viewport = kwargs["viewport"]
+    config = kwargs["config"]
+    assert isinstance(viewport, dict) and isinstance(config, EffectiveConfig)
+    record = Screenshot(
+        task_id=task.id,
+        url=str(kwargs["url"]),
+        browser=config.browser,
+        width=int(viewport["width"]),
+        height=int(viewport["height"]),
+        file_format=config.fmt,
+        file_path="existing.jpg",
+        signed_url="signed",
+        status="ok",
+        duration_seconds=1.0,
+        device_type=str(kwargs["device_type"]),
+    )
+    session = kwargs["session"]
+    assert isinstance(session, _FakeWorkerSession)
+    session.add(record)
+    return record
+
+
+async def test_db_timeout_above_env_is_capped_at_the_arq_timeout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # DB says 9200 s, ARQ cancels the job at TASK_JOB_TIMEOUT_SECONDS=7200: that
+    # cancel is the job timeout (timed_out + placeholders), not an interrupt.
+    task, config = _mixed_device_task()
+    config.viewports = config.viewports[:2]  # 1920 desktop, 390 mobile
+    session = _FakeWorkerSession(task, config)
+    browser = _FakeBrowser()
+    clock = [0.0]
+
+    def fake_monotonic() -> float:
+        return clock.pop(0) if clock else 7200.0
+
+    async def capture_once_then_arq_cancel(**kwargs: object) -> Screenshot:
+        if session.screenshots:
+            raise asyncio.CancelledError()
+        return _record(task, kwargs)
+
+    caplog.set_level(logging.WARNING, logger="app.tasks.worker")
+    with (
+        _patched_run(session, browser, capture_once_then_arq_cancel),
+        patch("app.tasks.worker.settings.TASK_JOB_TIMEOUT_SECONDS", 7200),
+        patch("app.tasks.worker.time.monotonic", new=fake_monotonic),
+        patch(
+            "app.tasks.worker.get_application_settings",
+            new=AsyncMock(return_value=_settings_row(task_job_timeout_seconds=9200)),
+        ),
+        patch(
+            "app.tasks.worker.is_user_cancel_requested",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await run_screenshot_task({"db_engine": object()}, str(task.id))
+
+    assert task.status == "timed_out"
+    assert (task.progress_done, task.progress_failed, task.progress_total) == (1, 1, 2)
+    placeholder = next(s for s in session.screenshots if s.status == "failed")
+    assert placeholder.error_message == "Task timed out before this capture completed."
+    assert (placeholder.width, placeholder.device_type) == (390, "mobile")
+    assert placeholder.warnings == [] and placeholder.capture_meta is None
+    assert browser.closed is True
+    assert any(
+        "exceeds TASK_JOB_TIMEOUT_SECONDS=7200" in m for m in caplog.messages
+    )
+
+
+async def test_db_timeout_below_env_is_enforced_by_the_run() -> None:
+    # DB says 1 s, ARQ would only cancel at 7200 s: the run stops itself,
+    # records timed_out with placeholders and returns normally.
+    task, config = _mixed_device_task()
+    config.viewports = config.viewports[:2]  # 1920 desktop, 390 mobile
+    session = _FakeWorkerSession(task, config)
+    browser = _FakeBrowser()
+    real_monotonic = time.monotonic
+    started = False
+    hung = asyncio.Event()
+
+    def fake_monotonic() -> float:
+        # The job "started" 0.95 s ago: 50 ms of the 1 s budget are left.
+        nonlocal started
+        if not started and sys._getframe(1).f_code.co_name == "run_screenshot_task":
+            started = True
+            return real_monotonic() - 0.95
+        return real_monotonic()
+
+    async def capture_then_hang(**kwargs: object) -> Screenshot:
+        if session.screenshots:
+            hung.set()
+            await asyncio.Event().wait()  # never finishes
+        return _record(task, kwargs)
+
+    with (
+        _patched_run(session, browser, capture_then_hang),
+        patch("app.tasks.worker.settings.TASK_JOB_TIMEOUT_SECONDS", 7200),
+        patch("app.tasks.worker.time.monotonic", new=fake_monotonic),
+        patch(
+            "app.tasks.worker.get_application_settings",
+            new=AsyncMock(return_value=_settings_row(task_job_timeout_seconds=1)),
+        ),
+    ):
+        # No CancelledError escapes: ARQ sees a normal return.
+        await asyncio.wait_for(
+            run_screenshot_task({"db_engine": object()}, str(task.id)), 5
+        )
+
+    assert started and hung.is_set()
+    assert task.status == "timed_out"
+    assert (task.progress_done, task.progress_failed, task.progress_total) == (1, 1, 2)
+    assert task.completed_at is not None
+    placeholder = next(s for s in session.screenshots if s.status == "failed")
+    assert (placeholder.width, placeholder.device_type) == (390, "mobile")
+    assert placeholder.warnings == [] and placeholder.capture_meta is None
+    assert browser.closed is True
+    assert all(context.closed for context in browser.contexts)
+
+
+async def test_self_enforced_deadline_keeps_other_timeouts_as_errors() -> None:
+    # A TimeoutError that is not the run's own deadline fails the task.
+    task, config = _two_viewport_task(["https://example.com/a/"])
+    session = _FakeWorkerSession(task, config)
+
+    async def capture(**_kwargs: object) -> SimpleNamespace:
+        raise TimeoutError("something else")
+
+    with (
+        _patched_run(session, _FakeBrowser(), capture),
+        patch("app.tasks.worker.settings.TASK_JOB_TIMEOUT_SECONDS", 7200),
+        patch(
+            "app.tasks.worker.get_application_settings",
+            new=AsyncMock(return_value=_settings_row(task_job_timeout_seconds=600)),
+        ),
+    ):
+        await run_screenshot_task({"db_engine": object()}, str(task.id))
+
+    assert task.status == "failed"
+    assert session.screenshots == []

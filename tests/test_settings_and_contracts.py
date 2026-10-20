@@ -2,11 +2,19 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from app.auth.dependencies import get_current_admin_user, get_current_user
+from app.auth.models import User
 from app.core.config import Settings
+from app.core.config import settings as env_settings
+from app.core.database import get_session
+from app.core.exceptions import UnprocessableError
+from app.main import create_app
 from app.projects.models import (
     ProjectConfig,
     ProjectConfigRead,
@@ -218,3 +226,87 @@ def test_browser_inputs_alias_legacy_chromium_to_chrome() -> None:
 def test_browser_inputs_reject_unknown_names(build) -> None:
     with pytest.raises(ValidationError, match="Unknown browser"):
         build()
+
+
+# ---------------------------------------------------------------------------
+# Task job timeout ceiling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", [7200, 60, None])
+def test_settings_accept_a_job_timeout_up_to_the_env_ceiling(value: int | None) -> None:
+    session = _FakeSession()
+    with patch.object(env_settings, "TASK_JOB_TIMEOUT_SECONDS", 7200):
+        updated = asyncio.run(
+            update_application_settings(
+                session, ApplicationSettingsUpdate(task_job_timeout_seconds=value)
+            )
+        )
+
+    assert updated.task_job_timeout_seconds == value
+
+
+def test_settings_reject_a_job_timeout_above_the_env_ceiling() -> None:
+    session = _FakeSession()
+    asyncio.run(get_application_settings(session))
+
+    with (
+        patch.object(env_settings, "TASK_JOB_TIMEOUT_SECONDS", 7200),
+        pytest.raises(UnprocessableError) as raised,
+    ):
+        asyncio.run(
+            update_application_settings(
+                session,
+                ApplicationSettingsUpdate(
+                    task_job_timeout_seconds=9200, screenshot_quality=10
+                ),
+            )
+        )
+
+    assert raised.value.status_code == 422
+    assert "TASK_JOB_TIMEOUT_SECONDS" in raised.value.detail
+    assert "7200" in raised.value.detail
+    stored = session.store[APPLICATION_SETTINGS_SINGLETON_ID]
+    assert stored.task_job_timeout_seconds is None  # nothing was applied
+    assert stored.screenshot_quality == DEFAULT_SCREENSHOT_QUALITY
+
+
+# ---------------------------------------------------------------------------
+# Errors through the app (422)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def client() -> TestClient:
+    app = create_app()
+    user = User(
+        id=uuid.uuid4(),
+        name="Admin",
+        email="admin@example.com",
+        hashed_password="hashed",
+        is_admin=True,
+    )
+
+    async def no_session():
+        yield SimpleNamespace()
+
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_current_admin_user] = lambda: user
+    app.dependency_overrides[get_session] = no_session
+    return TestClient(app)
+
+
+def test_too_long_job_timeout_is_a_422_naming_the_env_var(client: TestClient) -> None:
+    class _Session(_FakeSession):
+        async def get(self, model, key):  # type: ignore[override]
+            return ApplicationSettings(id=APPLICATION_SETTINGS_SINGLETON_ID)
+
+    async def session():
+        yield _Session()
+
+    client.app.dependency_overrides[get_session] = session  # type: ignore[attr-defined]
+    with patch.object(env_settings, "TASK_JOB_TIMEOUT_SECONDS", 7200):
+        response = client.patch("/settings/", json={"task_job_timeout_seconds": 7201})
+
+    assert response.status_code == 422
+    assert "TASK_JOB_TIMEOUT_SECONDS" in response.json()["detail"]

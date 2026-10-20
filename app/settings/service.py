@@ -3,6 +3,7 @@ from typing import Any
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings as env_settings
+from app.core.exceptions import UnprocessableError
 from app.settings.models import (
     APPLICATION_SETTINGS_SINGLETON_ID,
     ApplicationSettings,
@@ -66,12 +67,30 @@ async def get_application_settings(session: AsyncSession) -> ApplicationSettings
     return settings
 
 
+def _check_task_job_timeout(value: int | None) -> None:
+    """Refuse a task job timeout above TASK_JOB_TIMEOUT_SECONDS.
+
+    That env value is the worker's ARQ ``job_timeout``: ARQ cancels every job
+    at it, so a longer setting could never take effect.
+    """
+    ceiling = env_settings.TASK_JOB_TIMEOUT_SECONDS
+    if value is not None and value > ceiling:
+        raise UnprocessableError(
+            f"Task job timeout cannot exceed {ceiling} s: the worker stops every "
+            f"job at TASK_JOB_TIMEOUT_SECONDS ({ceiling}). Raise "
+            "TASK_JOB_TIMEOUT_SECONDS in .env and restart the worker to allow "
+            "a longer timeout."
+        )
+
+
 async def update_application_settings(
     session: AsyncSession,
     data: ApplicationSettingsUpdate,
 ) -> ApplicationSettings:
+    updates = data.model_dump(exclude_unset=True)
+    _check_task_job_timeout(updates.get("task_job_timeout_seconds"))
     settings = await get_application_settings(session)
-    for field, value in data.model_dump(exclude_unset=True).items():
+    for field, value in updates.items():
         setattr(settings, field, value)
 
     session.add(settings)

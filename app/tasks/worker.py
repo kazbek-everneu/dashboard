@@ -264,6 +264,28 @@ async def _close_quietly(context: Any | None) -> None:
         logger.debug("browser context close failed: %s", exc)
 
 
+def _resolve_job_timeout(db_seconds: int, env_seconds: int) -> tuple[int, bool]:
+    """``(effective timeout, self_enforced)`` of a task run.
+
+    ``env_seconds`` (TASK_JOB_TIMEOUT_SECONDS) is ARQ's ``job_timeout``, the
+    real ceiling: ARQ cancels the job there whatever the DB says. A smaller DB
+    value is enforced by the run itself; a larger one is capped (and logged).
+    Non-positive values mean "no limit" on their side.
+    """
+    if env_seconds <= 0:
+        return max(db_seconds, 0), db_seconds > 0
+    if db_seconds <= 0 or db_seconds == env_seconds:
+        return env_seconds, False
+    if db_seconds > env_seconds:
+        logger.warning(
+            "task_job_timeout_seconds=%d exceeds TASK_JOB_TIMEOUT_SECONDS=%d "
+            "(the worker's ARQ job timeout); using %d",
+            db_seconds, env_seconds, env_seconds,
+        )
+        return env_seconds, False
+    return db_seconds, True
+
+
 async def finish_task(
     engine: Any, task_id: uuid.UUID, status: str, **fields: object
 ) -> str | None:
@@ -296,7 +318,11 @@ class _RunPlan:
     effective: EffectiveConfig
     combos: list[_Combo]
     sem_limit: int
+    # min(DB task_job_timeout_seconds, TASK_JOB_TIMEOUT_SECONDS)
     job_timeout_seconds: int
+    # True when the DB value is below the env one: ARQ would only cancel at
+    # the env value, so the run enforces its own deadline.
+    self_enforced: bool
     reuse_context: bool
 
 
@@ -354,14 +380,17 @@ async def _load_run_plan(engine: Any, tid: uuid.UUID) -> _RunPlan:
                     combos.append((url, size, browser_name, vp_entry.device_type))
 
         # Effective tuning values (DB override > .env), kept as plain values.
+        job_timeout_seconds, self_enforced = _resolve_job_timeout(
+            int(resolve_setting(app_settings, "task_job_timeout_seconds")),
+            int(settings.TASK_JOB_TIMEOUT_SECONDS),
+        )
         return _RunPlan(
             project_id=task.project_id,
             effective=effective,
             combos=combos,
             sem_limit=max(int(resolve_setting(app_settings, "sem_limit")), 1),
-            job_timeout_seconds=max(
-                int(resolve_setting(app_settings, "task_job_timeout_seconds")), 0
-            ),
+            job_timeout_seconds=job_timeout_seconds,
+            self_enforced=self_enforced,
             reuse_context=bool(resolve_setting(app_settings, "reuse_browser_context")),
         )
 
@@ -380,6 +409,10 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
        Each (url, browser, device type) group captures with one device profile.
     5. Write progress to DB as it goes; beat ``heartbeat_at`` meanwhile.
     6. Set final task status and completed_at.
+
+    The run is bounded by min(DB task_job_timeout_seconds,
+    TASK_JOB_TIMEOUT_SECONDS): ARQ cancels the job at the env value; a smaller
+    DB value is enforced here (``timed_out`` + placeholders, normal return).
     """
     engine = ctx["db_engine"]
     tid = uuid.UUID(task_id)
@@ -785,6 +818,27 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
             except Exception as exc:
                 logger.warning("task=%s browser close failed: %s", task_id, exc)
 
+    async def _launch_and_run(pw: Any) -> bool:
+        """Launch one browser per name and run every group; False when a
+        launch failed (the task is failed already)."""
+        # Launch one Playwright Browser instance per unique browser name.
+        # Per-viewport overrides mean we may need more than one browser type.
+        for bn in unique_browsers:
+            try:
+                browser_instances[bn] = await _launch_browser(pw, bn)
+            except Exception as exc:
+                logger.error(
+                    "task=%s browser launch failed browser=%s: %s",
+                    task_id, bn, exc,
+                )
+                await finish_task(engine, tid, "failed")
+                return False
+
+        producer = asyncio.create_task(_producer())
+        consumers = [asyncio.create_task(_consumer()) for _ in range(worker_count)]
+        await asyncio.gather(producer, *consumers)
+        return True
+
     # ------------------------------------------------------------------
     # Load the run plan, launch browser(s) and run all combinations
     # ------------------------------------------------------------------
@@ -821,33 +875,36 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
             maxsize=max(sem_limit * 2, 1)
         )
 
+        # A DB timeout below the env one is enforced here: ARQ would only
+        # cancel the job at TASK_JOB_TIMEOUT_SECONDS.
+        deadline_s: float | None = None
+        if plan.self_enforced:
+            elapsed = time.monotonic() - job_started_monotonic
+            deadline_s = job_timeout_seconds - elapsed
+        job_deadline = asyncio.timeout(deadline_s)
+        timed_out = False
         async with async_playwright() as pw:
             try:
-                # Launch one Playwright Browser instance per unique browser name.
-                # Per-viewport overrides mean we may need more than one browser type.
-                for bn in unique_browsers:
-                    try:
-                        browser_instances[bn] = await _launch_browser(pw, bn)
-                    except Exception as exc:
-                        logger.error(
-                            "task=%s browser launch failed browser=%s: %s",
-                            task_id, bn, exc,
-                        )
-                        await finish_task(engine, tid, "failed")
-                        return
-
-                producer = asyncio.create_task(_producer())
-                consumers = [
-                    asyncio.create_task(_consumer())
-                    for _ in range(worker_count)
-                ]
-                await asyncio.gather(producer, *consumers)
+                async with job_deadline:
+                    launched = await _launch_and_run(pw)
+                if not launched:
+                    return
                 if browser_connection_lost:
                     raise RuntimeError(
                         "browser connection lost and reconnect failed"
                     )
+            except TimeoutError:
+                if not job_deadline.expired():
+                    raise
+                timed_out = True
             finally:
                 await _close_browsers()
+        if timed_out:
+            logger.warning(
+                "task=%s timed out after %ss", task_id, job_timeout_seconds
+            )
+            await _mark_timed_out()
+            return
     except asyncio.CancelledError:
         if await _was_user_cancel_requested():
             logger.info("task=%s cancelled by user-requested worker abort", task_id)
