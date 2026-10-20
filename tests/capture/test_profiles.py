@@ -2,7 +2,7 @@ import pytest
 
 from app.projects.models import ViewportEntry
 from app.screenshots import service
-from app.screenshots.capture import prepare, profiles
+from app.screenshots.capture import prepare, profiles, readiness
 from app.screenshots.capture.profiles import DeviceProfile
 from tests.capture.fakes import FakeBrowser, FakePage
 
@@ -278,8 +278,10 @@ async def test_open_capture_context_uses_the_capture_defaults() -> None:
     assert browser.context_kwargs == [
         {"viewport": {"width": 390, "height": 844}, "reduced_motion": "reduce"}
     ]
-    # One init script, added positionally: just the IO override for now.
-    assert context.init_scripts == [prepare.JS_IO_OVERRIDE]
+    # One init script, added positionally: the IO override + activity tracker.
+    assert context.init_scripts == [
+        prepare.JS_IO_OVERRIDE + "\n" + readiness.JS_ACTIVITY_TRACKER
+    ]
     assert context.closed is False
 
 
@@ -319,7 +321,12 @@ async def test_open_capture_context_applies_profile_options() -> None:
     )
 
     assert browser.context_kwargs[0]["has_touch"] is True
-    assert context.init_scripts == [prepare.JS_IO_OVERRIDE + "\nwindow.__qa = 1;"]
+    assert context.init_scripts == [
+        prepare.JS_IO_OVERRIDE
+        + "\n"
+        + readiness.JS_ACTIVITY_TRACKER
+        + "\nwindow.__qa = 1;"
+    ]
 
 
 async def test_open_capture_context_closes_the_context_when_init_fails() -> None:

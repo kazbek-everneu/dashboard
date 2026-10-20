@@ -156,8 +156,8 @@ async def test_run_attempt_second_chance_after_fonts_timeout() -> None:
 
     outcome = await _run(page)
 
-    # prepare (not ready, ignored) → verdict 1 (not ready) → second chance (ready)
-    assert page.evaluated.count("wait-fonts") == 3
+    # prepare (not ready, ignored) → verdict (not ready: only fonts_timeout)
+    assert page.evaluated.count("wait-fonts") == 2
     assert outcome.captured_with_unstable_dom is False
 
 
