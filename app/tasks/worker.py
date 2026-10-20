@@ -92,6 +92,8 @@ _CONNECT_RETRY_DELAY_S = 1.0
 # the browser server restarts its launchServer, which takes a few seconds.
 _RECONNECT_ATTEMPTS = 6
 _RECONNECT_DELAYS_S: tuple[float, ...] = (1.0, 2.0, 3.0, 4.0, 5.0)
+# Bound of every context/browser close the worker awaits.
+_CLOSE_TIMEOUT_S = 10.0
 # A re-capture hands the capture a deadline this much before its own
 # wait_for fires, so the pipeline can still save a failure with its metadata.
 _RECAPTURE_DEADLINE_MARGIN_S = 15.0
@@ -255,13 +257,32 @@ def _is_connected(browser: Any) -> bool:
     return True if is_connected is None else bool(is_connected())
 
 
-async def _close_quietly(context: Any | None) -> None:
-    if context is None:
+def _consume_outcome(task: "asyncio.Future[Any]") -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+async def _bounded_close(target: Any) -> None:
+    """``target.close()`` bounded by ``_CLOSE_TIMEOUT_S``; raises on failure.
+
+    The close runs as its own task whose outcome is always retrieved: when the
+    caller is cancelled or gives up, the close still finishes in the background
+    and Playwright's protocol future is never left unobserved ("Future
+    exception was never retrieved: TargetClosedError").
+    """
+    task = asyncio.ensure_future(target.close())
+    task.add_done_callback(_consume_outcome)
+    await asyncio.wait_for(asyncio.shield(task), _CLOSE_TIMEOUT_S)
+
+
+async def _close_quietly(target: Any | None) -> None:
+    """Close a browser context (or browser), bounded; failures only logged."""
+    if target is None:
         return
     try:
-        await context.close()
+        await _bounded_close(target)
     except Exception as exc:
-        logger.debug("browser context close failed: %s", exc)
+        logger.debug("%s close failed: %s", type(target).__name__, exc)
 
 
 def _resolve_job_timeout(db_seconds: int, env_seconds: int) -> tuple[int, bool]:
@@ -814,7 +835,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
     async def _close_browsers() -> None:
         for b_instance in browser_instances.values():
             try:
-                await b_instance.close()
+                await _bounded_close(b_instance)
             except Exception as exc:
                 logger.warning("task=%s browser close failed: %s", task_id, exc)
 
@@ -886,7 +907,12 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
         async with async_playwright() as pw:
             try:
                 async with job_deadline:
-                    launched = await _launch_and_run(pw)
+                    # In its own task: when the run is cancelled or times out,
+                    # that task ends cancelled, and Playwright then cancels the
+                    # protocol futures of calls it left pending instead of
+                    # failing them when the browsers close (which logged
+                    # "Future exception was never retrieved").
+                    launched = await asyncio.ensure_future(_launch_and_run(pw))
                 if not launched:
                     return
                 if browser_connection_lost:
@@ -1225,7 +1251,10 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
                         + recapture_timeout
                         - _RECAPTURE_DEADLINE_MARGIN_S
                     )
-                    await asyncio.wait_for(
+                    # In its own task: a timed-out capture ends cancelled, so
+                    # Playwright cancels the protocol futures it left pending
+                    # instead of failing them when the browser closes.
+                    capture = asyncio.ensure_future(
                         capture_screenshot(
                             browser=browser,
                             session=session,
@@ -1239,12 +1268,12 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
                             device_type=device_type,
                             browser_provider=_provide_browser,
                             deadline_at=deadline_at,
-                        ),
-                        timeout=recapture_timeout,
+                        )
                     )
+                    await asyncio.wait_for(capture, timeout=recapture_timeout)
             finally:
                 try:
-                    await browser.close()
+                    await _bounded_close(browser)
                 except Exception as exc:
                     logger.warning(
                         "recapture screenshot=%s browser close failed: %s",

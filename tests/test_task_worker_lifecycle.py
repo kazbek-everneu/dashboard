@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import logging
 import sys
 import time
@@ -26,6 +27,7 @@ from app.tasks.worker import (
     _CHROMIUM_LAUNCH_ARGS,
     _RECONNECT_ATTEMPTS,
     _RECONNECT_DELAYS_S,
+    _close_quietly,
     _group_combos,
     _launch_browser,
     _resolve_job_timeout,
@@ -1709,3 +1711,34 @@ async def test_self_enforced_deadline_keeps_other_timeouts_as_errors() -> None:
 
     assert task.status == "failed"
     assert session.screenshots == []
+
+
+# ---------------------------------------------------------------------------
+# Bounded closes
+# ---------------------------------------------------------------------------
+
+
+async def test_close_quietly_is_bounded_and_consumes_a_late_failure() -> None:
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, object]] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+    released = asyncio.Event()
+
+    class _HangingContext:
+        async def close(self) -> None:
+            await released.wait()
+            raise RuntimeError("Target page, context or browser has been closed")
+
+    try:
+        with patch("app.tasks.worker._CLOSE_TIMEOUT_S", 0.01):
+            await _close_quietly(_HangingContext())  # returns after the bound
+        released.set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous)
+
+    assert reported == []  # the late close failure was retrieved
