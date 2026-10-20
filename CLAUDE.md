@@ -210,15 +210,27 @@ shared `CaptureLimiter` into `ctx["capture_limiter"]`; jobs resize it to the eff
 `sem_limit` (jobs run without it — unit tests — fall back to a job-local limiter). Run it
 with `python -m arq app.worker.main.WorkerSettings` (the `worker` compose service does this).
 
-**Capture timing** ([screenshots/service.py](app/screenshots/service.py)): scroll and settle
-pauses are adaptive — `_wait_for_quiet` ends a pause once no tracked request
-(`_InflightTracker`: image/font/stylesheet/script/document; xhr/fetch only right after
-`goto`; never media) has been in flight for the quiet period, capped at the old fixed
-pause, so no wait is ever longer than before. A stabilization timeout first gets an
-in-place second chance on the same page (`_finalize_readiness` with the longer retry
-window) before the capture is marked unstable; only asset/other errors re-navigate in a
-fresh context. Page scripts that wait (`_JS_WAIT_FOR_FONTS`, `_JS_DECODE_VISIBLE_IMAGES`)
-bound themselves and run via `_evaluate_bounded`.
+**Capture package** ([screenshots/capture/](app/screenshots/capture/)): stages take a
+`CaptureRun` and return a dataclass result — `navigation.navigate` → `prepare.prepare_page`
+→ `prepare.reapply_transforms` + `readiness.finalize` → `prepare.final_touches` →
+`snapshot.take_snapshot`, run by `pipeline.run_attempt` / `pipeline.capture_with_retries`;
+[screenshots/service.py](app/screenshots/service.py) keeps `capture_screenshot` (file +
+row). Modules call each other through the module object and read tunables as `cfg.NAME`
+from `capture/config.py`, so tests patch the defining module
+(`app.screenshots.capture.readiness.wait_for_dom_stability`,
+`app.screenshots.capture.clock.now`). Every page script carries a `/*qa:<name>*/` marker
+as the first token of its function body and runs through `jsutil`; the test fakes in
+`tests/capture/fakes.py` answer scripts by marker.
+
+**Capture timing**: scroll and settle pauses are adaptive — `network.wait_for_quiet` ends a
+pause once no tracked request (`network.InflightTracker`: image/font/stylesheet/script/
+document; xhr/fetch only right after `goto`; never media) has been in flight for the quiet
+period, capped at the old fixed pause, so no wait is ever longer than before. A
+stabilization timeout first gets an in-place second chance on the same page
+(`readiness.finalize` with the longer retry window) before the capture is marked unstable;
+only asset/other errors re-navigate in a fresh context. Page scripts that wait
+(`readiness.JS_WAIT_FOR_FONTS`, `readiness.JS_DECODE_VISIBLE_IMAGES`) bound themselves and
+run via `jsutil.evaluate_self_bounded`.
 
 ## Remote browser
 
@@ -324,7 +336,7 @@ compose service.
 | UTC time helpers | [app/core/time.py](app/core/time.py) |
 | Operator CLI | [app/cli.py](app/cli.py) |
 | Capture pipeline (ARQ jobs) | [app/tasks/worker.py](app/tasks/worker.py) |
-| Capture + signed-URL storage | [app/screenshots/service.py](app/screenshots/service.py), [app/screenshots/storage.py](app/screenshots/storage.py) |
+| Capture + signed-URL storage | [app/screenshots/capture/](app/screenshots/capture/), [app/screenshots/service.py](app/screenshots/service.py), [app/screenshots/storage.py](app/screenshots/storage.py) |
 | Worker entrypoint | [app/worker/main.py](app/worker/main.py) |
 | Frontend routing / api client / types | [frontend/src/App.tsx](frontend/src/App.tsx), [frontend/src/api/client.ts](frontend/src/api/client.ts), [frontend/src/types/index.ts](frontend/src/types/index.ts) |
 | Test fakes & fixtures | [tests/conftest.py](tests/conftest.py) |
