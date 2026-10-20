@@ -58,11 +58,11 @@ def _default_enabled_sitemap_urls(parsed: list[object]) -> set[str]:
             latest_by_cpt[entry.cpt] = entry
 
     enabled_urls = {
-        getattr(entry, "url")
+        entry.url
         for entry in parsed
         if getattr(entry, "cpt", None) not in {"post", "product"}
     }
-    enabled_urls.update(getattr(entry, "url") for entry in latest_by_cpt.values())
+    enabled_urls.update(entry.url for entry in latest_by_cpt.values())
     return enabled_urls
 
 

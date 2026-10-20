@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.projects.service import _default_enabled_sitemap_urls
 
@@ -15,10 +15,10 @@ class _Entry:
 def test_latest_post_and_product_only_are_enabled_by_default() -> None:
     entries = [
         _Entry("https://example.com/about", "page", None, 0),
-        _Entry("https://example.com/post-old", "post", datetime(2024, 1, 1, tzinfo=timezone.utc), 1),
-        _Entry("https://example.com/post-new", "post", datetime(2024, 2, 1, tzinfo=timezone.utc), 2),
-        _Entry("https://example.com/product-old", "product", datetime(2024, 3, 1, tzinfo=timezone.utc), 3),
-        _Entry("https://example.com/product-new", "product", datetime(2024, 4, 1, tzinfo=timezone.utc), 4),
+        _Entry("https://example.com/post-old", "post", datetime(2024, 1, 1, tzinfo=UTC), 1),
+        _Entry("https://example.com/post-new", "post", datetime(2024, 2, 1, tzinfo=UTC), 2),
+        _Entry("https://example.com/product-old", "product", datetime(2024, 3, 1, tzinfo=UTC), 3),
+        _Entry("https://example.com/product-new", "product", datetime(2024, 4, 1, tzinfo=UTC), 4),
     ]
 
     assert _default_enabled_sitemap_urls(entries) == {

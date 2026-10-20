@@ -29,7 +29,9 @@ def _is_public_ip(ip_text: str) -> bool:
     )
 
 
-async def validate_public_url(url: str, *, allowed_hosts: set[str] | None = None) -> str:
+async def validate_public_url(
+    url: str, *, allowed_hosts: set[str] | None = None
+) -> str:
     parsed = urlparse(url)
     if parsed.scheme not in _ALLOWED_SCHEMES or not parsed.hostname:
         raise UnprocessableError(f"Invalid URL: {url!r}. Must be absolute http(s)://...")

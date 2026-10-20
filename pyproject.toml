@@ -60,6 +60,11 @@ ignore = [
     "B008", # do not perform function calls in default arguments (FastAPI Depends pattern)
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Migrations hold long SQL/op lines; tests hold long literal fixtures.
+"alembic/versions/*" = ["E501"]
+"tests/*" = ["E501"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
 

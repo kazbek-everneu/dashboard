@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.core.config import settings  # noqa: F401 — validated on startup
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 

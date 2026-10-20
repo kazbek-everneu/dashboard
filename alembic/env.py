@@ -1,22 +1,18 @@
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
 
-from app.core.config import settings
+from alembic import context
 
 # Import all models here so Alembic can detect them for autogenerate.
 from app.auth.models import User  # noqa: F401
-
+from app.core.config import settings
 from app.projects.models import Project, ProjectConfig, SitemapURL  # noqa: F401
-
-from app.settings.models import ApplicationSettings  # noqa: F401
-
-from app.tasks.models import Task  # noqa: F401
-
 from app.screenshots.models import Screenshot  # noqa: F401
+from app.settings.models import ApplicationSettings  # noqa: F401
+from app.tasks.models import Task  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

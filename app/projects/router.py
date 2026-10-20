@@ -17,7 +17,6 @@ from app.projects.models import (
     SitemapURLCreate,
     SitemapURLRead,
     SitemapURLUpdate,
-    SitemapURLsGrouped,
 )
 from app.projects.service import (
     bulk_update_sitemap_urls,
@@ -27,8 +26,8 @@ from app.projects.service import (
     fetch_and_store_sitemap,
     get_project,
     get_project_config,
-    list_projects,
     list_project_summaries,
+    list_projects,
     list_sitemap_urls_flat,
     toggle_sitemap_url,
     update_project,

@@ -1,15 +1,14 @@
-from enum import Enum
+from enum import StrEnum
 
 import sqlalchemy as sa
 from sqlmodel import Field, SQLModel
-
 
 DEFAULT_SCREENSHOT_FORMAT = "jpeg"
 DEFAULT_SCREENSHOT_QUALITY = 85
 APPLICATION_SETTINGS_SINGLETON_ID = 1
 
 
-class ScreenshotFormat(str, Enum):
+class ScreenshotFormat(StrEnum):
     JPEG = "jpeg"
     PNG = "png"
 

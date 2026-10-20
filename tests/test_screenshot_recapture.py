@@ -20,7 +20,6 @@ from app.tasks.limiter import CaptureLimiter
 from app.tasks.models import Task
 from app.tasks.worker import recapture_screenshot, reset_orphaned_recapturing
 
-
 # ---------------------------------------------------------------------------
 # Builders
 # ---------------------------------------------------------------------------

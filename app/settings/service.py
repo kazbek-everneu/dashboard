@@ -18,7 +18,9 @@ _ENV_FALLBACKS: dict[str, str] = {
     "access_token_expire_minutes": "ACCESS_TOKEN_EXPIRE_MINUTES",
     "password_reset_token_expire_minutes": "PASSWORD_RESET_TOKEN_EXPIRE_MINUTES",
     "password_reset_rate_limit_max": "PASSWORD_RESET_RATE_LIMIT_MAX",
-    "password_reset_rate_limit_window_seconds": "PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS",
+    "password_reset_rate_limit_window_seconds": (
+        "PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS"
+    ),
     "smtp_host": "SMTP_HOST",
     "smtp_port": "SMTP_PORT",
     "smtp_from_email": "SMTP_FROM_EMAIL",

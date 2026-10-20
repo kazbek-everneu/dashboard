@@ -1,16 +1,16 @@
 """Tests for WordPress sitemap parser."""
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.projects.sitemap import (
     _NS_SITEMAP,
+    SitemapEntry,
     _extract_cpt,
     _parse_sitemap_index,
     _parse_urlset,
-    SitemapEntry,
     fetch_sitemap_urls,
 )
 
@@ -98,7 +98,7 @@ class TestParseUrlset:
     def test_extracts_lastmod_when_present(self) -> None:
         root = _make_urlset(("https://example.com/post-1", "2024-01-02T03:04:05Z"))
         assert _parse_urlset(root) == [
-            ("https://example.com/post-1", datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)),
+            ("https://example.com/post-1", datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)),
         ]
 
     def test_skips_local_sitemap_xml_urls(self) -> None:
@@ -222,7 +222,7 @@ class TestFetchSitemapUrls:
             SitemapEntry(
                 url="https://example.com/latest-post",
                 cpt="post",
-                lastmod=datetime(2024, 5, 1, 0, 0, tzinfo=timezone.utc),
+                lastmod=datetime(2024, 5, 1, 0, 0, tzinfo=UTC),
                 order=0,
             )
         ]

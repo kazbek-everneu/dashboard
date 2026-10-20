@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import BinaryIO
 
-
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 JPEG_SOI = b"\xff\xd8"
 JPEG_SOS = 0xDA

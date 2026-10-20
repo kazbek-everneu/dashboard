@@ -10,16 +10,17 @@ Revises: d2a4c6e8f0b3
 Create Date: 2026-05-31 00:00:00.000000
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
+
+import sqlalchemy as sa
 
 from alembic import op
-import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "e8c1b4a9d3f2"
-down_revision: Union[str, None] = "d2a4c6e8f0b3"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "d2a4c6e8f0b3"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # (column name, SQLAlchemy type). All nullable, no server_default.
 _NEW_COLUMNS: tuple[tuple[str, sa.types.TypeEngine], ...] = (
