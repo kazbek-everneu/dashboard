@@ -123,15 +123,20 @@ def _int(raw: dict[str, Any], key: str) -> int:
     return max(0, int(value))
 
 
-def page_metrics_from_raw(raw: object) -> PageMetrics | None:
+def page_metrics_from_raw(raw: object, *, mobile: bool = False) -> PageMetrics | None:
     """The metrics a ``/*qa:page-metrics*/`` result describes; None when it
     is not a dict or carries no usable size. ``inner_width`` is the layout
-    viewport width (see cfg.LAYOUT_SCROLLBAR_MAX_PX)."""
+    viewport width: the root's clientWidth under *mobile* emulation (no
+    scrollbars there, and innerWidth grows with the content Chrome zooms out
+    to), else innerWidth unless clientWidth is narrower by more than a
+    scrollbar (cfg.LAYOUT_SCROLLBAR_MAX_PX)."""
     if not isinstance(raw, dict):
         return None
     inner_width = _int(raw, "innerWidth")
     client_width = _int(raw, "clientWidth")
-    if 0 < client_width < inner_width - cfg.LAYOUT_SCROLLBAR_MAX_PX:
+    if 0 < client_width < inner_width and (
+        mobile or client_width < inner_width - cfg.LAYOUT_SCROLLBAR_MAX_PX
+    ):
         inner_width = client_width
     metrics = PageMetrics(
         doc_width=_int(raw, "docWidth"),
@@ -153,7 +158,7 @@ async def measure_page(run: CaptureRun) -> PageMetrics | None:
     except Exception as exc:
         logger.warning("page metrics unavailable for %s: %s", run.url, exc)
         return None
-    return page_metrics_from_raw(raw)
+    return page_metrics_from_raw(raw, mobile=run.profile.is_mobile)
 
 
 def overflow_clip(

@@ -326,6 +326,15 @@ def test_layout_width_is_client_width_when_emulation_widened_inner_width() -> No
     assert clip is not None and clip["width"] == 390
 
 
+def test_mobile_layout_width_is_client_width_even_for_a_small_overflow() -> None:
+    # elmearts.com/thank-you at 390: innerWidth 404 — within scrollbar range,
+    # but an emulated mobile page has no scrollbars.
+    raw = metrics(docWidth=404, innerWidth=404, clientWidth=390)
+
+    assert snapshot.page_metrics_from_raw(raw, mobile=True).inner_width == 390
+    assert snapshot.page_metrics_from_raw(raw).inner_width == 404
+
+
 @pytest.mark.parametrize("client_width", [1265, 1280, 0, None])
 def test_a_scrollbar_wide_or_missing_client_width_keeps_inner_width(
     client_width: int | None,
