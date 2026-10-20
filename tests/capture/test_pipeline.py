@@ -537,7 +537,7 @@ async def test_capture_with_retries_builds_a_profile_from_the_viewport() -> None
 
     profile = attempt.await_args.args[4]
     assert profile.device_type == "mobile"
-    assert profile.context_options() == {}
+    assert profile.is_mobile is True
 
 
 async def test_capture_with_retries_end_to_end_on_fakes() -> None:

@@ -116,3 +116,21 @@ def stabilization_timeout_ms(config: EffectiveConfig, retry: bool = False) -> in
     if retry:
         return min(int(base * RETRY_SETTLE_MULTIPLIER), MAX_RETRY_SETTLE_TIMEOUT_MS)
     return base
+
+
+# --- B1: device profiles ---
+# Read by profiles.build_profile; see the user-agent table there.
+
+# Locale of every capture context: navigator.language(s) and Accept-Language,
+# the same on all engines (left alone, each engine sends its own header and
+# Firefox reports navigator.languages = ["undefined"]).
+PROFILE_LOCALE = "en-US"
+# OS tokens of the emulated user agents (Chrome's reduced Android UA always
+# says "Android 10; K", so it has no setting).
+FIREFOX_ANDROID_VERSION = "14"  # "Android 14; Mobile|Tablet"
+IOS_VERSION = "18_5"  # "CPU iPhone OS 18_5" / "CPU OS 18_5"
+# What the profile init script makes navigator report on emulated Android
+# devices, and the touch points of an emulated touch device whose engine
+# reports none (Firefox and WebKit report 0 even with has_touch).
+ANDROID_NAVIGATOR_PLATFORM = "Linux armv8l"
+EMULATED_TOUCH_POINTS = 5
