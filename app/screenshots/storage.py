@@ -1,11 +1,19 @@
+import asyncio
 import hashlib
 import hmac
+import logging
 import re
+import shutil
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import urlparse
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+ARCHIVES_DIRNAME = "archives"
 
 
 def _sanitise_url_path(url: str) -> str:
@@ -62,6 +70,66 @@ def abs_file_path(relative_path: str) -> Path:
 def ensure_parent(relative_path: str) -> None:
     """Create all intermediate directories for relative_path if they don't exist."""
     abs_file_path(relative_path).parent.mkdir(parents=True, exist_ok=True)
+
+
+def project_dir(project_id: uuid.UUID | str) -> Path:
+    """Directory holding every screenshot of a project."""
+    return Path(settings.DATA_DIR) / str(project_id)
+
+
+def task_dir(project_id: uuid.UUID | str, task_id: uuid.UUID | str) -> Path:
+    """Directory holding every screenshot of a task."""
+    return project_dir(project_id) / str(task_id)
+
+
+def archives_dir() -> Path:
+    return Path(settings.DATA_DIR) / ARCHIVES_DIRNAME
+
+
+def archive_path(task_id: uuid.UUID | str) -> Path:
+    """The cached ZIP archive of a task."""
+    return archives_dir() / f"{task_id}.zip"
+
+
+def _is_inside_data_dir(path: Path) -> bool:
+    root = Path(settings.DATA_DIR).resolve()
+    return root in path.resolve().parents
+
+
+def remove_paths(paths: Iterable[Path]) -> None:
+    """Delete files/directories under DATA_DIR; missing ones are skipped.
+
+    Anything that resolves outside DATA_DIR is refused, and errors are logged
+    rather than raised — the DB rows are already gone by the time this runs.
+    """
+    for path in paths:
+        if not _is_inside_data_dir(path):
+            logger.error("Refusing to delete %s: not inside DATA_DIR", path)
+            continue
+        try:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("Could not delete %s: %s", path, exc)
+
+
+async def delete_task_files(
+    project_id: uuid.UUID | str, task_id: uuid.UUID | str
+) -> None:
+    """Delete a task's screenshot files and its cached archive."""
+    await asyncio.to_thread(
+        remove_paths, [task_dir(project_id, task_id), archive_path(task_id)]
+    )
+
+
+async def delete_project_files(
+    project_id: uuid.UUID | str, task_ids: Iterable[uuid.UUID | str]
+) -> None:
+    """Delete a project's screenshot files and its tasks' cached archives."""
+    paths = [project_dir(project_id), *(archive_path(t) for t in task_ids)]
+    await asyncio.to_thread(remove_paths, paths)
 
 
 def _build_token(message: str) -> str:

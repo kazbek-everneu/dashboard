@@ -11,12 +11,16 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.auth.models import User
-from app.core.config import settings
 from app.core.database import get_session
 from app.core.exceptions import NotFoundError
 from app.projects.service import get_project
 from app.screenshots.models import Screenshot
-from app.screenshots.storage import abs_file_path, generate_archive_signed_url
+from app.screenshots.storage import (
+    abs_file_path,
+    archive_path,
+    archives_dir,
+    generate_archive_signed_url,
+)
 from app.tasks.models import (
     Task,
     TaskCreate,
@@ -152,15 +156,15 @@ async def create_archive_endpoint(
             detail="Task must be completed to create archive",
         )
 
-    archives_dir = Path(settings.DATA_DIR) / "archives"
-    archives_dir.mkdir(parents=True, exist_ok=True)
-    archive_path = archives_dir / f"{task_id}.zip"
+    target_dir = archives_dir()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    cached = archive_path(task_id)
 
     # Reuse cached archive for completed tasks — avoid re-zipping on every click
-    if archive_path.exists() and task.status == "completed":
+    if cached.exists() and task.status == "completed":
         return ArchiveResponse(
             archive_url=generate_archive_signed_url(str(task_id)),
-            file_size=archive_path.stat().st_size,
+            file_size=cached.stat().st_size,
         )
 
     result = await session.exec(
@@ -178,11 +182,11 @@ async def create_archive_endpoint(
         )
 
     # Run ZIP creation in a thread pool — never blocks the event loop
-    archive_path = await asyncio.get_running_loop().run_in_executor(
-        None, _create_archive_sync, str(task_id), screenshots, archives_dir
+    created = await asyncio.get_running_loop().run_in_executor(
+        None, _create_archive_sync, str(task_id), screenshots, target_dir
     )
 
     return ArchiveResponse(
         archive_url=generate_archive_signed_url(str(task_id)),
-        file_size=archive_path.stat().st_size,
+        file_size=created.stat().st_size,
     )

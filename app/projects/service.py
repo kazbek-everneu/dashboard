@@ -28,6 +28,7 @@ from app.projects.models import (
     SitemapURLUpdate,
 )
 from app.screenshots.models import Screenshot
+from app.screenshots.storage import delete_project_files
 from app.tasks.lifecycle import ACTIVE_TASK_STATUSES
 from app.tasks.models import Task
 
@@ -197,8 +198,13 @@ async def delete_project(
             "A capture is still running for this project. "
             "Cancel it or wait for it to finish before deleting the project."
         )
+    # The cascade removes the tasks; keep their ids to delete their archives.
+    task_ids = list(
+        (await session.exec(select(Task.id).where(Task.project_id == project_id))).all()
+    )
     await session.delete(project)
     await session.commit()
+    await delete_project_files(project_id, task_ids)
     logger.info("Deleted project id=%s", project_id)
 
 

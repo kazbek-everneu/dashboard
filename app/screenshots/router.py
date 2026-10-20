@@ -9,7 +9,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.auth.models import User
-from app.core.config import settings
 from app.core.database import get_session
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.projects.service import get_project
@@ -18,6 +17,7 @@ from app.screenshots.models import Screenshot, ScreenshotRead
 from app.screenshots.service import request_screenshot_recapture
 from app.screenshots.storage import (
     abs_file_path,
+    archives_dir,
     generate_signed_url,
     verify_archive_token,
     verify_signed_url,
@@ -153,12 +153,12 @@ async def serve_archive(
     if not verify_archive_token(filename, expires=expires, token=token):
         raise ForbiddenError("Invalid or missing token")
 
-    archive_path = Path(settings.DATA_DIR) / "archives" / filename
-    if not archive_path.is_file():
+    archive_file = archives_dir() / filename
+    if not archive_file.is_file():
         raise NotFoundError("Archive not found")
 
     return FileResponse(
-        path=str(archive_path),
+        path=str(archive_file),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

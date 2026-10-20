@@ -1281,3 +1281,47 @@ async def test_delete_task_skips_abort_when_worker_is_gone() -> None:
 
     abort_worker_job.assert_not_called()
     assert session.tasks == []
+
+
+# ---------------------------------------------------------------------------
+# Deleting a task deletes its files
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_task_removes_its_files() -> None:
+    user = _user()
+    project = _project(user)
+    task = _task(project, user, status="completed")
+    session = _FakeTaskSession([task])
+    delete_files = AsyncMock()
+
+    with (
+        patch("app.tasks.service.get_project", new=AsyncMock(return_value=project)),
+        patch("app.tasks.service.delete_task_files", new=delete_files),
+    ):
+        await delete_task(session, task.id, user)
+
+    assert session.tasks == []
+    delete_files.assert_awaited_once_with(project.id, task.id)
+
+
+async def test_delete_task_refuses_while_a_screenshot_is_recapturing() -> None:
+    class _RecapturingSession(_FakeTaskSession):
+        async def exec(self, _statement: object) -> _FakeResult:
+            return _FakeResult([uuid.uuid4()])
+
+    user = _user()
+    project = _project(user)
+    task = _task(project, user, status="completed")
+    session = _RecapturingSession([task])
+    delete_files = AsyncMock()
+
+    with (
+        patch("app.tasks.service.get_project", new=AsyncMock(return_value=project)),
+        patch("app.tasks.service.delete_task_files", new=delete_files),
+        pytest.raises(ConflictError, match="re-captured"),
+    ):
+        await delete_task(session, task.id, user)
+
+    assert session.tasks == [task]
+    delete_files.assert_not_called()

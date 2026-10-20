@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -32,6 +33,9 @@ class _FakeResult:
 
     def first(self) -> object | None:
         return self._values[0] if self._values else None
+
+    def all(self) -> list[object]:
+        return self._values
 
 
 class _FakeProjectSession:
@@ -155,11 +159,16 @@ async def test_delete_project_refuses_while_a_recapture_is_running() -> None:
         await delete_project(session, project.id, owner)  # type: ignore[arg-type]
 
 
-async def test_admin_can_delete_idle_project() -> None:
+async def test_admin_can_delete_idle_project_and_its_files() -> None:
     project = _project(_user())
-    session = _FakeProjectSession(project, exec_results=[[], []])
+    task_ids = [uuid.uuid4(), uuid.uuid4()]
+    # active task lookup, recapturing lookup, the project's task ids
+    session = _FakeProjectSession(project, exec_results=[[], [], task_ids])
+    delete_files = AsyncMock()
 
-    await delete_project(session, project.id, _user(is_admin=True))  # type: ignore[arg-type]
+    with patch("app.projects.service.delete_project_files", delete_files):
+        await delete_project(session, project.id, _user(is_admin=True))  # type: ignore[arg-type]
 
     assert session.deleted == [project]
     assert session.committed is True
+    delete_files.assert_awaited_once_with(project.id, task_ids)

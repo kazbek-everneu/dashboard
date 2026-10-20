@@ -26,7 +26,12 @@ from app.screenshots.service import (
     capture_screenshot,
     open_capture_context,
 )
-from app.screenshots.storage import build_file_path, generate_signed_url
+from app.screenshots.storage import (
+    archive_path,
+    build_file_path,
+    generate_signed_url,
+    remove_paths,
+)
 from app.settings.service import get_application_settings, resolve_setting
 from app.tasks.lifecycle import (
     ACTIVE_TASK_STATUSES,
@@ -1043,4 +1048,6 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
         return
 
     await _recompute_task_progress(engine, task_id)
+    # The task's cached ZIP still holds the old image; the next download rebuilds it.
+    await asyncio.to_thread(remove_paths, [archive_path(task_id)])
     logger.info("recapture screenshot=%s complete task=%s", screenshot_id, task_id)

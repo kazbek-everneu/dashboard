@@ -1,4 +1,5 @@
 import io
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -66,3 +67,37 @@ def test_create_admin_reports_existing_email() -> None:
     ):
         engine.dispose = AsyncMock()
         cli.main(["create-admin", "--email", "boss@example.com", "--password-stdin"])
+
+
+def test_find_orphan_paths_only_lists_unowned_uuid_entries(tmp_path) -> None:
+    live_project, gone_project = str(uuid.uuid4()), str(uuid.uuid4())
+    live_task, gone_task, foreign_task = (str(uuid.uuid4()) for _ in range(3))
+    for rel in [
+        f"{live_project}/{live_task}/root",
+        f"{live_project}/{gone_task}/root",
+        f"{live_project}/{foreign_task}/root",
+        f"{gone_project}/{uuid.uuid4()}/root",
+        "not-a-uuid/keep",
+        "archives",
+    ]:
+        (tmp_path / rel).mkdir(parents=True)
+    for name in [f"{live_task}.zip", f"{gone_task}.zip", "notes.zip"]:
+        (tmp_path / "archives" / name).write_bytes(b"x")
+
+    orphans = cli.find_orphan_paths(
+        tmp_path,
+        project_ids={live_project, str(uuid.uuid4())},
+        # foreign_task exists but belongs to another project
+        task_projects={live_task: live_project, foreign_task: str(uuid.uuid4())},
+    )
+
+    assert set(orphans) == {
+        tmp_path / live_project / gone_task,
+        tmp_path / live_project / foreign_task,
+        tmp_path / gone_project,
+        tmp_path / "archives" / f"{gone_task}.zip",
+    }
+
+
+def test_find_orphan_paths_handles_missing_data_dir(tmp_path) -> None:
+    assert cli.find_orphan_paths(tmp_path / "missing", set(), {}) == []

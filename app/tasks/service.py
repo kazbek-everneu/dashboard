@@ -12,6 +12,8 @@ from app.core.time import utcnow
 from app.core.url_security import normalize_project_child_url
 from app.projects.models import ProjectConfig, SitemapURL
 from app.projects.service import get_project
+from app.screenshots.models import Screenshot
+from app.screenshots.storage import delete_task_files
 from app.tasks.lifecycle import ACTIVE_TASK_STATUSES, task_is_alive, worker_job_id_for
 from app.tasks.models import (
     Task,
@@ -314,6 +316,17 @@ async def delete_task(session: AsyncSession, task_id: uuid.UUID, user: User) -> 
     await get_project(session, task.project_id, user)
     if task.status in ACTIVE_TASK_STATUSES:
         raise ConflictError("Cannot delete a running task. Cancel it first.")
+    recapturing = await session.exec(
+        select(Screenshot.id)
+        .where(Screenshot.task_id == task_id)
+        .where(Screenshot.status == "recapturing")
+        .limit(1)
+    )
+    if recapturing.first() is not None:
+        raise ConflictError(
+            "A screenshot of this task is being re-captured. "
+            "Wait for it to finish before deleting the task."
+        )
     # A just-cancelled job may still be shutting down; one whose worker is gone
     # (no recent heartbeat) has nothing left to abort.
     if task.worker_job_id and task_is_alive(task):
@@ -322,8 +335,10 @@ async def delete_task(session: AsyncSession, task_id: uuid.UUID, user: User) -> 
             failure_detail="Task is still stopping. Please try again.",
         )
     user_id = user.id
+    project_id = task.project_id
     await session.delete(task)
     await session.commit()
+    await delete_task_files(project_id, task_id)
     logger.info("Task id=%s deleted by user=%s", task_id, user_id)
 
 
