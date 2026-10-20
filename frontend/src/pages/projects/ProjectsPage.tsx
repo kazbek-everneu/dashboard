@@ -249,7 +249,7 @@ export default function ProjectsPage() {
   return (
     <div className="page-shell">
       <PageHeader
-        title={<h1 className="text-2xl font-bold text-foreground">Projects</h1>}
+        title={<h1 className="text-2xl font-semibold tracking-tight">Projects</h1>}
         description="Manage and monitor your web projects"
         meta={`${projects.length} active project${projects.length === 1 ? "" : "s"}`}
         actions={

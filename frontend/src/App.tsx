@@ -2,6 +2,7 @@ import { useEffect } from "react"
 import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom"
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query"
 import { Toaster } from "@/components/ui/sonner"
+import { Spinner } from "@/components/ui/spinner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { authApi } from "@/api/auth"
 import { useAuth } from "@/hooks/useAuth"
@@ -31,16 +32,24 @@ function LegacyProjectTasksRedirect() {
   return <Navigate to={`/tasks?project_id=${id}`} replace />
 }
 
+function FullPageSpinner() {
+  return (
+    <div className="flex min-h-svh items-center justify-center">
+      <Spinner className="size-6 text-muted-foreground" />
+    </div>
+  )
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, initialized } = useAuth()
-  if (!initialized) return <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+  if (!initialized) return <FullPageSpinner />
   if (!isAuthenticated) return <Navigate to="/login" replace />
   return <>{children}</>
 }
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, initialized } = useAuth()
-  if (!initialized) return <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+  if (!initialized) return <FullPageSpinner />
   if (isAuthenticated) return <Navigate to="/projects" replace />
   return <>{children}</>
 }

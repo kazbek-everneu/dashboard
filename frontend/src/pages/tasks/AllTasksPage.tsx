@@ -141,7 +141,7 @@ export default function AllTasksPage() {
   return (
     <div className="page-shell">
       <PageHeader
-        title={<h1 className="text-2xl font-bold text-foreground">Tasks</h1>}
+        title={<h1 className="text-2xl font-semibold tracking-tight">Tasks</h1>}
         description="View and manage screenshot tasks across all projects"
         meta={`${tasksQuery.data?.total ?? 0} indexed task${(tasksQuery.data?.total ?? 0) === 1 ? "" : "s"}`}
         actions={

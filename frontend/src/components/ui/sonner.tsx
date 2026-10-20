@@ -7,7 +7,7 @@ import { useThemeStore } from "@/store/theme"
 
 const Toaster = ({ ...props }: ToasterProps) => {
   // Follow the app theme store (not the OS) so toasts match the UI.
-  const theme = useThemeStore((state) => state.theme)
+  const theme = useThemeStore((state) => state.resolvedTheme)
 
   return (
     <Sonner

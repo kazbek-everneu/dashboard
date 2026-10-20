@@ -4,13 +4,13 @@ import { useQuery, useMutation } from "@tanstack/react-query"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import { ArrowLeft } from "lucide-react"
 import { toast } from "sonner"
 import { tasksApi } from "@/api/tasks"
 import { projectsApi } from "@/api/projects"
 import { extractApiError } from "@/lib/helpers"
 import { normalizeViewport } from "@/lib/viewportUtils"
 import PageHeader from "@/components/layout/PageHeader"
+import { useBreadcrumbs } from "@/hooks/useBreadcrumbs"
 import { Button } from "@/components/ui/button"
 import { FormField } from "@/components/ui/FormField"
 import {
@@ -44,7 +44,6 @@ export default function CreateTaskPage() {
   const [searchParams] = useSearchParams()
   const queryProjectId = searchParams.get("project_id") ?? ""
 
-  const backTo = queryProjectId ? `/projects/${queryProjectId}` : "/tasks"
 
   const [taskConfig, setTaskConfig] = useState<TaskOverrideConfig>({
     default_browsers: ["chrome"],
@@ -74,6 +73,18 @@ export default function CreateTaskPage() {
     queryKey: ["projects"],
     queryFn: projectsApi.list,
   })
+
+  // Opened from a project page: keep that project in the trail.
+  const contextProjectName = projectsQuery.data?.find((p) => p.id === queryProjectId)?.name
+  useBreadcrumbs(
+    queryProjectId
+      ? [
+          { label: "Projects", to: "/projects" },
+          { label: contextProjectName ?? "Project", to: `/projects/${queryProjectId}` },
+          { label: "New task" },
+        ]
+      : [{ label: "Tasks", to: "/tasks" }, { label: "New task" }],
+  )
 
   const configQuery = useQuery({
     queryKey: ["project-config", selectedProjectId],
@@ -151,22 +162,8 @@ export default function CreateTaskPage() {
   return (
     <div className="space-y-6 max-w-6xl">
       <PageHeader
-        className="justify-start"
-        title={
-          <div className="flex items-start gap-4">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => navigate(backTo)}
-              className="p-1 h-auto mt-1"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <h1 className="text-2xl font-bold text-foreground">Create New Task</h1>
-          </div>
-        }
+        title={<h1 className="text-2xl font-semibold tracking-tight">Create New Task</h1>}
         description="Configure and launch a new screenshot task"
-        descriptionClassName="ml-12"
       />
 
       <form onSubmit={handleSubmit((v) => createMutation.mutate(v))}>

@@ -3,10 +3,13 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
+import { TriangleAlert } from "lucide-react"
 import { authApi } from "@/api/auth"
 import { extractApiError } from "@/lib/helpers"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Spinner } from "@/components/ui/spinner"
 import { FormField } from "@/components/ui/FormField"
 import { AuthCardLayout } from "@/components/features/auth/AuthCardLayout"
 
@@ -47,16 +50,16 @@ export default function ResetPasswordPage() {
       title="Choose a new password"
       description="Use a password with at least 8 characters"
       footer={
-        <p className="mt-4 text-center text-sm text-muted-foreground">
+        <>
           Back to{" "}
-          <Link to="/login" className="text-primary underline underline-offset-4">
+          <Link to="/login" className="font-medium text-foreground underline underline-offset-4">
             sign in
           </Link>
-        </p>
+        </>
       }
     >
       {token ? (
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
           <FormField label="New password" htmlFor="password" error={errors.password?.message}>
             <Input id="password" type="password" {...register("password")} />
           </FormField>
@@ -68,14 +71,16 @@ export default function ResetPasswordPage() {
             <Input id="confirmPassword" type="password" {...register("confirmPassword")} />
           </FormField>
           <Button type="submit" className="w-full" disabled={isSubmitting}>
-            {isSubmitting ? "Saving..." : "Reset password"}
+            {isSubmitting && <Spinner data-icon="inline-start" />}
+          {isSubmitting ? "Saving..." : "Reset password"}
           </Button>
         </form>
       ) : (
-        <div className="space-y-4">
-          <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
-            This reset link is missing a token.
-          </p>
+        <div className="flex flex-col gap-4">
+          <Alert variant="destructive">
+            <TriangleAlert />
+            <AlertDescription>This reset link is missing a token.</AlertDescription>
+          </Alert>
           <Button asChild className="w-full">
             <Link to="/forgot-password">Request a new link</Link>
           </Button>

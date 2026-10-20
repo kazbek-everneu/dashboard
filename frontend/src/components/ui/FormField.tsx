@@ -1,7 +1,6 @@
-import type { ReactNode } from "react"
+import { cloneElement, isValidElement, useId, type ReactNode } from "react"
 
-import { cn } from "@/lib/utils"
-import { Label } from "@/components/ui/label"
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 
 interface FormFieldProps {
   label?: ReactNode
@@ -22,18 +21,31 @@ export function FormField({
   className,
   children,
 }: FormFieldProps) {
+  const id = useId()
+  const hintId = hint ? `${id}-hint` : undefined
+  const errorId = error ? `${id}-error` : undefined
+  const describedBy = [hintId, errorId].filter(Boolean).join(" ")
+
+  // Point the control at its hint/error so assistive tech announces them.
+  const control =
+    isValidElement<Record<string, unknown>>(children) && (error || describedBy)
+      ? cloneElement(children, {
+          ...(error ? { "aria-invalid": true } : {}),
+          ...(describedBy ? { "aria-describedby": describedBy } : {}),
+        })
+      : children
+
   return (
-    <div className={cn("space-y-1", className)}>
+    <Field data-invalid={error ? true : undefined} className={className}>
       {label ? (
-        <Label htmlFor={htmlFor}>
+        <FieldLabel htmlFor={htmlFor}>
           {label}
-          {required ? <span className="text-destructive"> *</span> : null}
-        </Label>
+          {required ? <span className="text-destructive">*</span> : null}
+        </FieldLabel>
       ) : null}
-      {children}
-      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-    </div>
+      {control}
+      {hint ? <FieldDescription id={hintId}>{hint}</FieldDescription> : null}
+      {error ? <FieldError id={errorId}>{error}</FieldError> : null}
+    </Field>
   )
 }
-

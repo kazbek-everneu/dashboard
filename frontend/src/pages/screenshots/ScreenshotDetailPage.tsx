@@ -3,7 +3,6 @@ import { useParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
-  ArrowLeft,
   Download,
   ChevronLeft,
   ChevronRight,
@@ -14,6 +13,7 @@ import { screenshotsApi } from "@/api/screenshots"
 import { buildImgUrl } from "@/components/screenshots/screenshot-utils"
 import { ScreenshotViewport } from "@/components/screenshots/ScreenshotViewport"
 import PageHeader from "@/components/layout/PageHeader"
+import { useBreadcrumbs } from "@/hooks/useBreadcrumbs"
 import { BrowserIcon } from "@/components/ui/BrowserIcon"
 import { Button } from "@/components/ui/button"
 import { MetadataCard } from "@/components/ui/MetadataCard"
@@ -167,6 +167,12 @@ export function ScreenshotDetailPage() {
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [navigateToIndex, nextIndex, nextPageIndex, nextViewportBrowserIndex, prevIndex])
 
+  useBreadcrumbs([
+    { label: "Tasks", to: "/tasks" },
+    { label: `Task #${shortId(taskId ?? "")}`, to: `/tasks/${taskId}` },
+    { label: "Screenshot" },
+  ])
+
   if (isLoading) {
     return (
       <StateMessage compact title="Loading screenshot" description="Fetching screenshot details..." />
@@ -190,19 +196,8 @@ export function ScreenshotDetailPage() {
     <div className="page-shell">
       <PageHeader
         title={
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => navigate(`/tasks/${taskId}`)}
-              className="h-auto p-1.5"
-            >
-              <ArrowLeft className="mr-1.5 h-4 w-4" />
-              Task #{shortId(taskId!)}
-            </Button>
-          </div>
+          <h1 className="text-xl font-semibold tracking-tight break-all">{screenshot.url}</h1>
         }
-        description={screenshot.url}
         meta={`Capture ${currentIndex + 1} of ${screenshots.length}`}
         actions={
           <div className="flex items-center gap-2">

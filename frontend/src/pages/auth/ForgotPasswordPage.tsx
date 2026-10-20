@@ -4,10 +4,13 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { Link } from "react-router-dom"
 import { toast } from "sonner"
+import { MailCheck } from "lucide-react"
 import { authApi } from "@/api/auth"
 import { extractApiError } from "@/lib/helpers"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Spinner } from "@/components/ui/spinner"
 import { FormField } from "@/components/ui/FormField"
 import { AuthCardLayout } from "@/components/features/auth/AuthCardLayout"
 
@@ -39,24 +42,26 @@ export default function ForgotPasswordPage() {
       title="Reset password"
       description="Enter your email to receive reset instructions"
       footer={
-        <p className="mt-4 text-center text-sm text-muted-foreground">
+        <>
           Remembered your password?{" "}
-          <Link to="/login" className="text-primary underline underline-offset-4">
+          <Link to="/login" className="font-medium text-foreground underline underline-offset-4">
             Sign in
           </Link>
-        </p>
+        </>
       }
     >
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
         <FormField label="Email" htmlFor="email" error={errors.email?.message}>
           <Input id="email" type="email" placeholder="you@example.com" {...register("email")} />
         </FormField>
         {message ? (
-          <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
-            {message}
-          </p>
+          <Alert>
+            <MailCheck />
+            <AlertDescription>{message}</AlertDescription>
+          </Alert>
         ) : null}
         <Button type="submit" className="w-full" disabled={isSubmitting}>
+          {isSubmitting && <Spinner data-icon="inline-start" />}
           {isSubmitting ? "Sending..." : "Send reset link"}
         </Button>
       </form>

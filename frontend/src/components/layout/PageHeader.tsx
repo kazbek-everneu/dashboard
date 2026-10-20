@@ -9,7 +9,6 @@ interface PageHeaderProps {
   actions?: ReactNode
   footer?: ReactNode
   footerClassName?: string
-  bordered?: boolean
   className?: string
   contentClassName?: string
   descriptionClassName?: string
@@ -22,34 +21,29 @@ export default function PageHeader({
   actions,
   footer,
   footerClassName,
-  bordered = true,
   className,
   contentClassName,
   descriptionClassName,
 }: PageHeaderProps) {
   return (
-    <div
-      className={cn(
-        "relative flex flex-col gap-5 glass-card px-6 py-6 sm:px-7 sm:py-7",
-        bordered && "border",
-        className,
-      )}
-    >
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className={cn("min-w-0 space-y-2", contentClassName)}>
+    <div className={cn("flex flex-col gap-4", className)}>
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div className={cn("min-w-0 space-y-1", contentClassName)}>
           {title}
           {description ? (
-            <div className={cn("max-w-3xl text-[15px] leading-6 text-[color:var(--text-secondary)]", descriptionClassName)}>
+            <div className={cn("max-w-3xl text-sm text-muted-foreground", descriptionClassName)}>
               {description}
             </div>
           ) : null}
-          {meta ? <div className="technical-caption">{meta}</div> : null}
+          {meta ? <div className="text-xs text-muted-foreground">{meta}</div> : null}
         </div>
 
-        {actions ? <div className="flex flex-wrap gap-2 lg:justify-end">{actions}</div> : null}
+        {actions ? (
+          <div className="flex flex-wrap items-center gap-2 md:justify-end">{actions}</div>
+        ) : null}
       </div>
 
-      {footer ? <div className={cn("surface-divider", footerClassName)}>{footer}</div> : null}
+      {footer ? <div className={footerClassName}>{footer}</div> : null}
     </div>
   )
 }

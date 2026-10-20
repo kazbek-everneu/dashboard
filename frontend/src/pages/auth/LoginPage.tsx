@@ -9,6 +9,7 @@ import { useAuth } from "@/hooks/useAuth"
 import { extractApiError } from "@/lib/helpers"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Spinner } from "@/components/ui/spinner"
 import { FormField } from "@/components/ui/FormField"
 import { AuthCardLayout } from "@/components/features/auth/AuthCardLayout"
 
@@ -59,22 +60,29 @@ export default function LoginPage() {
       title="QA Screenshot Tool"
       description="Sign in to your account"
       footer={
-        <p className="mt-4 text-center text-sm text-muted-foreground">
+        <>
           Don&apos;t have an account?{" "}
-          <Link to="/register" className="text-primary underline underline-offset-4">
+          <Link to="/register" className="font-medium text-foreground underline underline-offset-4">
             Register
           </Link>
-        </p>
+        </>
       }
     >
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
         <FormField label="Email" htmlFor="email" error={errors.email?.message}>
           <Input id="email" type="email" placeholder="you@example.com" {...register("email")} />
         </FormField>
         <FormField label="Password" htmlFor="password" error={errors.password?.message}>
           <Input id="password" type="password" {...register("password")} />
         </FormField>
+        <Link
+          to="/forgot-password"
+          className="-mt-2 self-end text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+        >
+          Forgot your password?
+        </Link>
         <Button type="submit" className="w-full" disabled={isSubmitting}>
+          {isSubmitting && <Spinner data-icon="inline-start" />}
           {isSubmitting ? "Signing in…" : "Sign in"}
         </Button>
       </form>

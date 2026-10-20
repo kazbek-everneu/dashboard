@@ -271,7 +271,7 @@ export default function UsersPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={<h1 className="text-2xl font-bold text-foreground">Users</h1>}
+        title={<h1 className="text-2xl font-semibold tracking-tight">Users</h1>}
         description="View registered users and create new accounts."
         actions={
           <Button onClick={openCreateModal} className="shrink-0">

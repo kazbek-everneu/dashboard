@@ -1,35 +1,43 @@
 import { create } from "zustand"
 
-type Theme = "light" | "dark"
+export type Theme = "light" | "dark" | "system"
+type ResolvedTheme = "light" | "dark"
 
 interface ThemeState {
   theme: Theme
-  toggleTheme: () => void
+  resolvedTheme: ResolvedTheme
+  setTheme: (theme: Theme) => void
 }
 
-function applyTheme(theme: Theme): void {
-  if (theme === "dark") {
-    document.documentElement.classList.add("dark")
-  } else {
-    document.documentElement.classList.remove("dark")
-  }
+const darkQuery = window.matchMedia("(prefers-color-scheme: dark)")
+
+function applyTheme(theme: Theme): ResolvedTheme {
+  const resolved: ResolvedTheme =
+    theme === "system" ? (darkQuery.matches ? "dark" : "light") : theme
+  const root = document.documentElement
+  root.classList.toggle("dark", resolved === "dark")
+  root.style.colorScheme = resolved
   localStorage.setItem("theme", theme)
+  return resolved
 }
 
 // Read persisted preference; default to light
-const initialTheme = (localStorage.getItem("theme") as Theme | null) ?? "light"
+const stored = localStorage.getItem("theme")
+const initialTheme: Theme = stored === "dark" || stored === "system" ? stored : "light"
 
 // Belt-and-suspenders: ensure the class is in sync even if the index.html
 // inline script was somehow bypassed (e.g. SSR, testing).
-applyTheme(initialTheme)
+const initialResolved = applyTheme(initialTheme)
 
 export const useThemeStore = create<ThemeState>((set) => ({
   theme: initialTheme,
+  resolvedTheme: initialResolved,
 
-  toggleTheme: () =>
-    set((state) => {
-      const next: Theme = state.theme === "light" ? "dark" : "light"
-      applyTheme(next)
-      return { theme: next }
-    }),
+  setTheme: (theme) => set({ theme, resolvedTheme: applyTheme(theme) }),
 }))
+
+// In "system" mode, follow OS theme changes live.
+darkQuery.addEventListener("change", () => {
+  const { theme, setTheme } = useThemeStore.getState()
+  if (theme === "system") setTheme("system")
+})

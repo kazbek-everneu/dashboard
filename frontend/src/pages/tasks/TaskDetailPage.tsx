@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Square, Trash2, Download, Archive, Loader2 } from "lucide-react"
+import { Square, Trash2, Download, Archive, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import { useTaskPolling } from "@/hooks/useTaskPolling"
 import { tasksApi } from "@/api/tasks"
@@ -12,6 +12,7 @@ import { formatDate, shortId, extractApiError } from "@/lib/helpers"
 import { formatFileSize } from "@/lib/formatters"
 import { formatElapsedTime, formatThroughput, formatAverageSeconds, browserLabel } from "@/lib/task-formatters"
 import PageHeader from "@/components/layout/PageHeader"
+import { useBreadcrumbs } from "@/hooks/useBreadcrumbs"
 import { BrowserIcon } from "@/components/ui/BrowserIcon"
 import { TaskProgressBar } from "@/components/tasks/TaskProgressBar"
 import { TaskStatsBar } from "@/components/tasks/TaskStatsBar"
@@ -166,6 +167,12 @@ export default function TaskDetailPage() {
       : null
   }, [screenshots])
 
+  useBreadcrumbs([
+    { label: "Tasks", to: "/tasks" },
+    ...(project ? [{ label: project.name, to: `/projects/${project.id}` }] : []),
+    { label: task ? `Task #${shortId(task.id)}` : "Task" },
+  ])
+
   if (isLoading) return <StateMessage compact title="Loading task" description="Preparing task details..." />
   if (!task) return <StateMessage compact tone="destructive" title="Task not found" />
 
@@ -214,15 +221,7 @@ export default function TaskDetailPage() {
       <PageHeader
         title={
           <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => navigate(`/projects/${task.project_id}`)}
-              className="p-1 h-auto"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <h1 className="text-2xl font-bold font-mono">Task #{shortId(task.id)}</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Task #{shortId(task.id)}</h1>
             <StatusBadge status={task.status} />
           </div>
         }
@@ -232,8 +231,6 @@ export default function TaskDetailPage() {
             {formatDate(task.created_at)}
           </>
         }
-        descriptionClassName="ml-8"
-        contentClassName="space-y-1"
         footerClassName="pt-1"
         footer={showStatsRow ? (
           <TaskStatsBar items={statsItems} />

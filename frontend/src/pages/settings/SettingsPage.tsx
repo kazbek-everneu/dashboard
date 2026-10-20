@@ -137,9 +137,8 @@ export function SettingsPage() {
   return (
     <div className="max-w-3xl">
       <PageHeader
-        bordered={false}
         className="mb-6"
-        title={<h1 className="text-2xl font-semibold">Settings</h1>}
+        title={<h1 className="text-2xl font-semibold tracking-tight">Settings</h1>}
         description="Global application settings"
       />
 

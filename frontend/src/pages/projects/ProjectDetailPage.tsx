@@ -4,13 +4,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import { ArrowLeft, Pencil, Trash2, Plus, Save } from "lucide-react"
+import { Pencil, Trash2, Plus, Save } from "lucide-react"
 import { toast } from "sonner"
 import { projectsApi } from "@/api/projects"
 import { tasksApi } from "@/api/tasks"
 import { extractApiError } from "@/lib/helpers"
 import { normalizeViewport } from "@/lib/viewportUtils"
 import PageHeader from "@/components/layout/PageHeader"
+import { useBreadcrumbs } from "@/hooks/useBreadcrumbs"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { FormField } from "@/components/ui/FormField"
@@ -205,6 +206,11 @@ export default function ProjectDetailPage() {
     return () => window.removeEventListener("beforeunload", handler)
   }, [hasUnsavedChanges])
 
+  useBreadcrumbs([
+    { label: "Projects", to: "/projects" },
+    { label: project?.name ?? "Project" },
+  ])
+
   if (projectQuery.isLoading) return <div className="text-muted-foreground">Loading…</div>
   if (!project) return <div className="text-destructive">Project not found.</div>
 
@@ -282,17 +288,8 @@ export default function ProjectDetailPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => navigate("/projects")} className="p-1 h-auto">
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <h1 className="text-2xl font-bold">{project.name}</h1>
-          </div>
-        }
+        title={<h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>}
         description={project.url}
-        descriptionClassName="ml-8"
-        contentClassName="space-y-1"
         actions={
           <div className="flex gap-2 shrink-0">
             <Link to={`/tasks/new?project_id=${id}`}>
