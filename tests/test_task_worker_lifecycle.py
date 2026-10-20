@@ -1,4 +1,8 @@
 import asyncio
+import gc
+import logging
+import sys
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -21,7 +25,12 @@ from app.tasks.models import Task, TaskCreate
 from app.tasks.service import _abort_worker_job, cancel_task, create_task, delete_task
 from app.tasks.worker import (
     _CHROMIUM_LAUNCH_ARGS,
+    _RECONNECT_ATTEMPTS,
+    _RECONNECT_DELAYS_S,
+    _close_quietly,
+    _group_combos,
     _launch_browser,
+    _resolve_job_timeout,
     finish_task,
     reap_orphaned_tasks,
     run_screenshot_task,
@@ -933,6 +942,7 @@ def _patched_run(
 
 
 def _two_viewport_task(urls: list[str]) -> tuple[Task, ProjectConfig]:
+    # Two desktop viewports: one device group (and context) per URL.
     user = _user()
     project = _project(user)
     task = _task(
@@ -941,7 +951,7 @@ def _two_viewport_task(urls: list[str]) -> tuple[Task, ProjectConfig]:
         target_urls=urls,
         override_viewports=[
             {"width": 1280, "height": 720},
-            {"width": 390, "height": 844},
+            {"width": 1024, "height": 768},
         ],
     )
     return task, _config(project.id)
@@ -965,9 +975,9 @@ async def test_worker_shares_one_context_per_url_and_browser() -> None:
 
     assert [(url, width) for url, width, _ in calls] == [
         ("https://example.com/a/", 1280),
-        ("https://example.com/a/", 390),
+        ("https://example.com/a/", 1024),
         ("https://example.com/b/", 1280),
-        ("https://example.com/b/", 390),
+        ("https://example.com/b/", 1024),
     ]
     context_a, context_b = browser.contexts
     assert [context for *_, context in calls] == [
@@ -1008,7 +1018,7 @@ async def test_worker_replaces_shared_context_after_failed_capture() -> None:
         override_viewports=[
             {"width": 1280, "height": 720},
             {"width": 1024, "height": 768},
-            {"width": 390, "height": 844},
+            {"width": 1440, "height": 900},
         ],
     )
     browser = _FakeBrowser()
@@ -1331,3 +1341,404 @@ async def test_delete_task_refuses_while_a_screenshot_is_recapturing() -> None:
 
     assert session.tasks == [task]
     delete_files.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Device groups, profiles and the browser provider
+# ---------------------------------------------------------------------------
+
+
+class _VersionedBrowser(_FakeBrowser):
+    """A fake browser with a version (for the profile's user agent) that
+    records the options of every context it creates."""
+
+    version = "149.0.7827.114"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.context_kwargs: list[dict[str, object]] = []
+
+    async def new_context(self, **kwargs: object) -> _FakeBrowserContext:
+        self.context_kwargs.append(kwargs)
+        return await super().new_context(**kwargs)
+
+
+def test_group_combos_groups_by_url_browser_and_device_type() -> None:
+    desktop_a = {"width": 1920, "height": 1080}
+    mobile = {"width": 390, "height": 844}
+    desktop_b = {"width": 1280, "height": 720}
+    combos = [
+        ("u1", desktop_a, "chrome", "desktop"),
+        ("u1", mobile, "chrome", "mobile"),
+        ("u1", desktop_b, "chrome", "desktop"),
+        ("u1", desktop_a, "firefox", "desktop"),
+        ("u2", mobile, "chrome", "mobile"),
+    ]
+
+    assert _group_combos(combos) == [
+        ("u1", "chrome", "desktop", [desktop_a, desktop_b]),
+        ("u1", "chrome", "mobile", [mobile]),
+        ("u1", "firefox", "desktop", [desktop_a]),
+        ("u2", "chrome", "mobile", [mobile]),
+    ]
+
+
+def _mixed_device_task() -> tuple[Task, ProjectConfig]:
+    user = _user()
+    project = _project(user)
+    task = _task(project, user, target_urls=["https://example.com/a/"])
+    config = _config(project.id)
+    config.viewports = [
+        {"width": 1920, "height": 1080, "device_type": "desktop", "browsers": None},
+        {"width": 390, "height": 844},  # auto-detected: mobile
+        {"width": 1280, "height": 720},  # auto-detected: desktop
+        {"width": 1366, "height": 1024, "device_type": "tablet"},  # explicit
+    ]
+    return task, config
+
+
+async def test_worker_captures_each_device_type_in_its_own_context() -> None:
+    task, config = _mixed_device_task()
+    browser = _VersionedBrowser()
+    calls: list[dict[str, object]] = []
+
+    async def capture(**kwargs: object) -> SimpleNamespace:
+        calls.append(kwargs)
+        return SimpleNamespace(status="ok")
+
+    with _patched_run(_FakeWorkerSession(task, config), browser, capture):
+        await run_screenshot_task({"db_engine": object()}, str(task.id))
+
+    # Groups in first-seen order: desktop (1920, 1280), mobile, tablet.
+    assert [
+        (c["viewport"], c["device_type"], c["profile"].device_type) for c in calls
+    ] == [
+        ({"width": 1920, "height": 1080}, "desktop", "desktop"),
+        ({"width": 1280, "height": 720}, "desktop", "desktop"),
+        ({"width": 390, "height": 844}, "mobile", "mobile"),
+        ({"width": 1366, "height": 1024}, "tablet", "tablet"),
+    ]
+    desktop, mobile, tablet = browser.contexts
+    assert [c["context"] for c in calls] == [desktop, desktop, mobile, tablet]
+    # One profile per group, shared by its captures.
+    assert calls[0]["profile"] is calls[1]["profile"]
+    # The shared contexts are opened with the group's profile.
+    desktop_opts, mobile_opts, tablet_opts = browser.context_kwargs
+    assert desktop_opts["viewport"] == {"width": 1920, "height": 1080}
+    assert "is_mobile" not in desktop_opts
+    assert mobile_opts["is_mobile"] is True and mobile_opts["has_touch"] is True
+    assert "Mobile Safari" in str(mobile_opts["user_agent"])
+    assert "Chrome/149.0.0.0" in str(mobile_opts["user_agent"])
+    assert tablet_opts["is_mobile"] is True
+    assert "Mobile Safari" not in str(tablet_opts["user_agent"])
+    assert all(c.closed for c in browser.contexts)
+    assert task.status == "completed"
+
+
+async def test_worker_passes_profile_and_provider_without_context_reuse() -> None:
+    task, config = _mixed_device_task()
+    browser = _VersionedBrowser()
+    calls: list[dict[str, object]] = []
+    provided: list[object] = []
+
+    async def capture(**kwargs: object) -> SimpleNamespace:
+        calls.append(kwargs)
+        provider = kwargs["browser_provider"]
+        assert callable(provider)
+        provided.append(await provider())
+        return SimpleNamespace(status="ok")
+
+    with (
+        _patched_run(_FakeWorkerSession(task, config), browser, capture),
+        patch("app.tasks.worker.settings.REUSE_BROWSER_CONTEXT", False),
+    ):
+        await run_screenshot_task({"db_engine": object()}, str(task.id))
+
+    assert [c["context"] for c in calls] == [None] * 4
+    assert browser.contexts == []
+    assert [c["profile"].device_type for c in calls] == [
+        "desktop",
+        "mobile",
+        "desktop",
+        "tablet",
+    ]
+    assert calls[1]["profile"].is_mobile is True
+    assert provided == [browser] * 4
+    config_passed = calls[0]["config"]
+    assert isinstance(config_passed, EffectiveConfig)
+    assert (config_passed.browser, config_passed.fmt, config_passed.timeout) == (
+        "chrome",
+        "jpeg",
+        30000,
+    )
+
+
+async def test_worker_reconnects_on_the_longer_schedule() -> None:
+    task, config = _two_viewport_task(
+        ["https://example.com/a/", "https://example.com/b/"]
+    )
+    first, second = _FakeBrowser(), _FakeBrowser()
+    launch = AsyncMock(side_effect=[first, second])
+    used: list[object] = []
+
+    async def capture(**kwargs: object) -> SimpleNamespace:
+        used.append(kwargs["browser"])
+        first.connected = False
+        return SimpleNamespace(status="ok")
+
+    with (
+        _patched_run(_FakeWorkerSession(task, config), first, capture),
+        patch("app.tasks.worker._launch_browser", new=launch),
+        patch("app.tasks.worker.settings.REUSE_BROWSER_CONTEXT", False),
+    ):
+        await run_screenshot_task({"db_engine": object()}, str(task.id))
+
+    initial, reconnect = launch.await_args_list
+    assert initial.kwargs == {}
+    assert reconnect.kwargs == {
+        "attempts": _RECONNECT_ATTEMPTS,
+        "delays": _RECONNECT_DELAYS_S,
+    }
+    assert used == [first, second, second, second]
+    assert task.status == "completed"
+
+
+async def test_launch_browser_uses_the_given_retry_schedule() -> None:
+    browser = _FakeBrowser()
+    pw = _FakePlaywright(browser)
+    pw.chromium.connect_plan = [ConnectionError("refused")] * 5
+    sleep = AsyncMock()
+
+    with (
+        patch("app.tasks.worker.settings.BROWSER_WS_ENDPOINT", "ws://browser"),
+        patch("app.tasks.worker.asyncio.sleep", new=sleep),
+    ):
+        result = await _launch_browser(
+            pw, "chrome", attempts=6, delays=(1, 2, 3, 4, 5)
+        )
+
+    assert result is browser
+    assert len(pw.chromium.connect_calls) == 6
+    assert [call.args[0] for call in sleep.await_args_list] == [1, 2, 3, 4, 5]
+
+
+async def test_launch_browser_retry_schedule_defaults_and_repeats_the_last_delay() -> None:
+    browser = _FakeBrowser()
+    pw = _FakePlaywright(browser)
+    sleep = AsyncMock()
+
+    with (
+        patch("app.tasks.worker.settings.BROWSER_WS_ENDPOINT", "ws://browser"),
+        patch("app.tasks.worker.asyncio.sleep", new=sleep),
+    ):
+        pw.chromium.connect_plan = [ConnectionError("refused")] * 3
+        with pytest.raises(ConnectionError):
+            await _launch_browser(pw, "chrome")
+        default_sleeps = [call.args[0] for call in sleep.await_args_list]
+
+        sleep.reset_mock()
+        pw.chromium.connect_plan = [ConnectionError("refused")] * 3
+        await _launch_browser(pw, "chrome", attempts=4, delays=(0.5,))
+        short_sleeps = [call.args[0] for call in sleep.await_args_list]
+
+    assert default_sleeps == [1.0, 1.0]  # today's 3 x 1 s
+    assert short_sleeps == [0.5, 0.5, 0.5]
+    assert len(pw.chromium.connect_calls) == 3 + 4
+
+
+# ---------------------------------------------------------------------------
+# Job timeout: min(DB, TASK_JOB_TIMEOUT_SECONDS)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("db", "env", "expected"),
+    [
+        (7200, 7200, (7200, False)),
+        (9200, 7200, (7200, False)),  # ARQ cancels at the env value anyway
+        (1800, 7200, (1800, True)),  # enforced by the run itself
+        (0, 7200, (7200, False)),
+        (1800, 0, (1800, True)),
+        (0, 0, (0, False)),
+    ],
+)
+def test_resolve_job_timeout(db: int, env: int, expected: tuple[int, bool]) -> None:
+    assert _resolve_job_timeout(db, env) == expected
+
+
+def _settings_row(**overrides: object) -> SimpleNamespace:
+    return SimpleNamespace(screenshot_format="jpeg", screenshot_quality=85, **overrides)
+
+
+def _record(task: Task, kwargs: dict[str, object]) -> Screenshot:
+    viewport = kwargs["viewport"]
+    config = kwargs["config"]
+    assert isinstance(viewport, dict) and isinstance(config, EffectiveConfig)
+    record = Screenshot(
+        task_id=task.id,
+        url=str(kwargs["url"]),
+        browser=config.browser,
+        width=int(viewport["width"]),
+        height=int(viewport["height"]),
+        file_format=config.fmt,
+        file_path="existing.jpg",
+        signed_url="signed",
+        status="ok",
+        duration_seconds=1.0,
+        device_type=str(kwargs["device_type"]),
+    )
+    session = kwargs["session"]
+    assert isinstance(session, _FakeWorkerSession)
+    session.add(record)
+    return record
+
+
+async def test_db_timeout_above_env_is_capped_at_the_arq_timeout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # DB says 9200 s, ARQ cancels the job at TASK_JOB_TIMEOUT_SECONDS=7200: that
+    # cancel is the job timeout (timed_out + placeholders), not an interrupt.
+    task, config = _mixed_device_task()
+    config.viewports = config.viewports[:2]  # 1920 desktop, 390 mobile
+    session = _FakeWorkerSession(task, config)
+    browser = _FakeBrowser()
+    clock = [0.0]
+
+    def fake_monotonic() -> float:
+        return clock.pop(0) if clock else 7200.0
+
+    async def capture_once_then_arq_cancel(**kwargs: object) -> Screenshot:
+        if session.screenshots:
+            raise asyncio.CancelledError()
+        return _record(task, kwargs)
+
+    caplog.set_level(logging.WARNING, logger="app.tasks.worker")
+    with (
+        _patched_run(session, browser, capture_once_then_arq_cancel),
+        patch("app.tasks.worker.settings.TASK_JOB_TIMEOUT_SECONDS", 7200),
+        patch("app.tasks.worker.time.monotonic", new=fake_monotonic),
+        patch(
+            "app.tasks.worker.get_application_settings",
+            new=AsyncMock(return_value=_settings_row(task_job_timeout_seconds=9200)),
+        ),
+        patch(
+            "app.tasks.worker.is_user_cancel_requested",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await run_screenshot_task({"db_engine": object()}, str(task.id))
+
+    assert task.status == "timed_out"
+    assert (task.progress_done, task.progress_failed, task.progress_total) == (1, 1, 2)
+    placeholder = next(s for s in session.screenshots if s.status == "failed")
+    assert placeholder.error_message == "Task timed out before this capture completed."
+    assert (placeholder.width, placeholder.device_type) == (390, "mobile")
+    assert placeholder.warnings == [] and placeholder.capture_meta is None
+    assert browser.closed is True
+    assert any(
+        "exceeds TASK_JOB_TIMEOUT_SECONDS=7200" in m for m in caplog.messages
+    )
+
+
+async def test_db_timeout_below_env_is_enforced_by_the_run() -> None:
+    # DB says 1 s, ARQ would only cancel at 7200 s: the run stops itself,
+    # records timed_out with placeholders and returns normally.
+    task, config = _mixed_device_task()
+    config.viewports = config.viewports[:2]  # 1920 desktop, 390 mobile
+    session = _FakeWorkerSession(task, config)
+    browser = _FakeBrowser()
+    real_monotonic = time.monotonic
+    started = False
+    hung = asyncio.Event()
+
+    def fake_monotonic() -> float:
+        # The job "started" 0.95 s ago: 50 ms of the 1 s budget are left.
+        nonlocal started
+        if not started and sys._getframe(1).f_code.co_name == "run_screenshot_task":
+            started = True
+            return real_monotonic() - 0.95
+        return real_monotonic()
+
+    async def capture_then_hang(**kwargs: object) -> Screenshot:
+        if session.screenshots:
+            hung.set()
+            await asyncio.Event().wait()  # never finishes
+        return _record(task, kwargs)
+
+    with (
+        _patched_run(session, browser, capture_then_hang),
+        patch("app.tasks.worker.settings.TASK_JOB_TIMEOUT_SECONDS", 7200),
+        patch("app.tasks.worker.time.monotonic", new=fake_monotonic),
+        patch(
+            "app.tasks.worker.get_application_settings",
+            new=AsyncMock(return_value=_settings_row(task_job_timeout_seconds=1)),
+        ),
+    ):
+        # No CancelledError escapes: ARQ sees a normal return.
+        await asyncio.wait_for(
+            run_screenshot_task({"db_engine": object()}, str(task.id)), 5
+        )
+
+    assert started and hung.is_set()
+    assert task.status == "timed_out"
+    assert (task.progress_done, task.progress_failed, task.progress_total) == (1, 1, 2)
+    assert task.completed_at is not None
+    placeholder = next(s for s in session.screenshots if s.status == "failed")
+    assert (placeholder.width, placeholder.device_type) == (390, "mobile")
+    assert placeholder.warnings == [] and placeholder.capture_meta is None
+    assert browser.closed is True
+    assert all(context.closed for context in browser.contexts)
+
+
+async def test_self_enforced_deadline_keeps_other_timeouts_as_errors() -> None:
+    # A TimeoutError that is not the run's own deadline fails the task.
+    task, config = _two_viewport_task(["https://example.com/a/"])
+    session = _FakeWorkerSession(task, config)
+
+    async def capture(**_kwargs: object) -> SimpleNamespace:
+        raise TimeoutError("something else")
+
+    with (
+        _patched_run(session, _FakeBrowser(), capture),
+        patch("app.tasks.worker.settings.TASK_JOB_TIMEOUT_SECONDS", 7200),
+        patch(
+            "app.tasks.worker.get_application_settings",
+            new=AsyncMock(return_value=_settings_row(task_job_timeout_seconds=600)),
+        ),
+    ):
+        await run_screenshot_task({"db_engine": object()}, str(task.id))
+
+    assert task.status == "failed"
+    assert session.screenshots == []
+
+
+# ---------------------------------------------------------------------------
+# Bounded closes
+# ---------------------------------------------------------------------------
+
+
+async def test_close_quietly_is_bounded_and_consumes_a_late_failure() -> None:
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, object]] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+    released = asyncio.Event()
+
+    class _HangingContext:
+        async def close(self) -> None:
+            await released.wait()
+            raise RuntimeError("Target page, context or browser has been closed")
+
+    try:
+        with patch("app.tasks.worker._CLOSE_TIMEOUT_S", 0.01):
+            await _close_quietly(_HangingContext())  # returns after the bound
+        released.set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous)
+
+    assert reported == []  # the late close failure was retrieved

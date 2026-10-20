@@ -5,9 +5,11 @@ it (``capture_screenshot``), writes the file and the ``screenshots`` row, and
 re-exports ``EffectiveConfig`` / ``open_capture_context`` for the worker.
 """
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Mapping
+from typing import Any
 
 from playwright.async_api import Browser, BrowserContext
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -18,6 +20,7 @@ from app.core.time import utcnow
 from app.screenshots.capture import pipeline, profiles
 from app.screenshots.capture.config import EffectiveConfig
 from app.screenshots.capture.profiles import DeviceProfile
+from app.screenshots.capture.types import CaptureResult
 from app.screenshots.image_dimensions import read_image_dimensions_from_bytes
 from app.screenshots.models import Screenshot
 from app.screenshots.storage import (
@@ -25,6 +28,7 @@ from app.screenshots.storage import (
     build_file_path,
     ensure_parent,
     generate_signed_url,
+    write_bytes_atomic,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +46,39 @@ async def open_capture_context(
 def _browser_version(browser: Browser) -> str | None:
     version = getattr(browser, "version", None)
     return version if isinstance(version, str) else None
+
+
+def _write_file(relative_path: str, data: bytes) -> None:
+    """Save *data* at the storage path, atomically (blocking: run in a thread)."""
+    ensure_parent(relative_path)
+    write_bytes_atomic(abs_file_path(relative_path), data)
+
+
+def _row_meta(
+    result: CaptureResult, profile: DeviceProfile, browser: Browser
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """``(warnings, capture_meta)`` for the row, as new objects.
+
+    The report's own values win; the top-level ``attempts`` /
+    ``browser_version`` and the ``device`` section are filled in when the
+    report has none. A failed capture stores no warnings and its partial meta
+    with ``failure {class, phase}``.
+    """
+    warnings, meta = result.report.to_db()
+    meta.setdefault("attempts", result.attempts)
+    version = _browser_version(browser)
+    if version is not None:
+        meta.setdefault("browser_version", version)
+    meta.setdefault("device", profile.meta())
+    if result.error is None:
+        return warnings, meta
+    if not isinstance(meta.get("failure"), dict):
+        meta["failure"] = {
+            "class": type(result.error).__name__,
+            "phase": getattr(result.error, "phase", None)
+            or result.report.current_phase,
+        }
+    return [], meta
 
 
 # ---------------------------------------------------------------------------
@@ -76,13 +113,20 @@ async def capture_screenshot(
     context; a retry always runs in a fresh isolated context.
 
     When *existing* is provided the same DB row is updated in place (re-capture)
-    instead of inserting a new record. The file on disk is overwritten at the
-    same deterministic path, and ``created_at`` is bumped so clients can
+    instead of inserting a new record: the file at the row's own ``file_path``
+    is overwritten (the path is never recomputed, so rows from before a storage
+    naming change keep their file) and ``created_at`` is bumped so clients can
     cache-bust the served image.
 
     *profile* defaults to the profile for *device_type* (else derived from the
     viewport width). *browser_provider* and *deadline_at* are passed through to
     the capture's retry policy.
+
+    The row gets the profile's ``device_type``. An ``ok`` row stores the
+    report's warnings and capture_meta and no error_message (an unstable DOM
+    is a ``dom_unstable`` warning); a ``failed`` row stores no warnings, the
+    partial meta with its ``failure`` section and the error text. The file is
+    written off the event loop, atomically.
     """
     width = viewport["width"]
     height = viewport["height"]
@@ -104,30 +148,27 @@ async def capture_screenshot(
         deadline_at=deadline_at,
         task_id=task_id,
     )
-    last_error = result.error
     duration = result.duration
-    data: bytes = b""
-    captured_with_unstable_dom = False
-    warning_message: str | None = None
-    if last_error is None and result.outcome is not None:
-        data = result.outcome.data
-        captured_with_unstable_dom = result.outcome.captured_with_unstable_dom
-        warning_message = result.outcome.warning_message
+    warnings, capture_meta = _row_meta(result, profile, browser)
 
-    # Build storage path and signed access URL
-    relative_path = build_file_path(
-        project_id, task_id, url, width, height, config.browser, config.fmt
-    )
+    # Storage path and signed access URL. A re-capture keeps the row's path.
+    if existing is not None and existing.file_path:
+        relative_path = existing.file_path
+    else:
+        relative_path = build_file_path(
+            project_id, task_id, url, width, height, config.browser, config.fmt
+        )
     # filename is everything after {project_id}/{task_id}/ — used in signed URL
     filename = "/".join(relative_path.split("/")[2:])
     signed_url = generate_signed_url(str(task_id), filename)
 
-    if last_error is None:
-        ensure_parent(relative_path)
-        abs_file_path(relative_path).write_bytes(data)
+    if result.error is None and result.outcome is not None:
+        data = result.outcome.data
+        await asyncio.to_thread(_write_file, relative_path, data)
         image_dimensions = read_image_dimensions_from_bytes(data)
         status = "ok"
-        error_message = warning_message
+        error_message = None
+        captured_with_unstable_dom = result.outcome.captured_with_unstable_dom
         logger.info(
             "task=%s saved url=%s viewport=%dx%d browser=%s path=%s "
             "duration=%.3fs unstable_dom=%s",
@@ -143,7 +184,7 @@ async def capture_screenshot(
     else:
         image_dimensions = None
         status = "failed"
-        error_message = str(last_error)
+        error_message = str(result.error)
         captured_with_unstable_dom = False
         logger.error(
             "task=%s failed url=%s viewport=%dx%d browser=%s duration=%.3fs",
@@ -179,6 +220,10 @@ async def capture_screenshot(
         existing.captured_with_unstable_dom = captured_with_unstable_dom
         existing.error_message = error_message
         existing.duration_seconds = duration
+        existing.device_type = profile.device_type
+        # New objects on purpose: JSONB columns do not track in-place changes.
+        existing.warnings = warnings
+        existing.capture_meta = capture_meta
         existing.created_at = utcnow()
         record = existing
     else:
@@ -197,6 +242,9 @@ async def capture_screenshot(
             captured_with_unstable_dom=captured_with_unstable_dom,
             error_message=error_message,
             duration_seconds=duration,
+            device_type=profile.device_type,
+            warnings=warnings,
+            capture_meta=capture_meta,
             created_at=utcnow(),
         )
     session.add(record)
@@ -252,6 +300,8 @@ async def request_screenshot_recapture(
     previous_status = screenshot.status
     previous_error = screenshot.error_message
 
+    # warnings, capture_meta and device_type stay until the new result (or a
+    # failure reset) replaces them.
     screenshot.status = "recapturing"
     screenshot.error_message = None
     session.add(screenshot)

@@ -1,8 +1,10 @@
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, TypeAdapter, field_validator, model_validator
+from pydantic import Field as PydanticField
+from pydantic_core import PydanticCustomError
 from sqlalchemy import Column, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -50,7 +52,8 @@ class ViewportEntry(BaseModel):
 
     ``device_type`` is auto-detected from ``width`` when not explicitly supplied.
     ``browsers`` is ``None`` (inherit project default) or a non-empty list of
-    browser names for a per-viewport override.
+    browser names for a per-viewport override. Lenient on purpose — the worker
+    reads stored data with it; API input goes through ViewportInput.
     """
 
     width: int
@@ -61,21 +64,78 @@ class ViewportEntry(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def auto_detect_device_type(cls, data: Any) -> Any:
-        """If ``device_type`` is absent from the raw dict, derive it from ``width``."""
+        """If ``device_type`` is absent from the raw dict, derive it from ``width``.
+
+        Returns a new dict (the caller's is left alone). A width that is not a
+        number is left to the field validation to report.
+        """
         if isinstance(data, dict) and "device_type" not in data:
-            width = data.get("width", 1920)
+            try:
+                width = int(data.get("width", 1920))
+            except (TypeError, ValueError):
+                return data
             if width >= 1024:
-                data["device_type"] = "desktop"
+                device_type = "desktop"
             elif width >= 768:
-                data["device_type"] = "tablet"
+                device_type = "tablet"
             else:
-                data["device_type"] = "mobile"
+                device_type = "mobile"
+            data = {**data, "device_type": device_type}
         return data
 
     @field_validator("browsers")
     @classmethod
     def validate_browsers(cls, v: list[str] | None) -> list[str] | None:
         return validate_browser_names(v) if v is not None else None
+
+
+# Viewport sizes the API accepts (the frontend enforces the same ranges).
+VIEWPORT_MIN_WIDTH = 320
+VIEWPORT_MAX_WIDTH = 3840
+VIEWPORT_MIN_HEIGHT = 400
+VIEWPORT_MAX_HEIGHT = 2160
+
+
+class ViewportInput(ViewportEntry):
+    """A viewport as the API accepts it: a ViewportEntry within the size limits."""
+
+    width: Annotated[
+        int, PydanticField(ge=VIEWPORT_MIN_WIDTH, le=VIEWPORT_MAX_WIDTH)
+    ]
+    height: Annotated[
+        int, PydanticField(ge=VIEWPORT_MIN_HEIGHT, le=VIEWPORT_MAX_HEIGHT)
+    ]
+
+
+_VIEWPORT_INPUTS = TypeAdapter(list[ViewportInput])
+
+
+def validate_viewport_inputs(
+    viewports: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Validate API viewports and return them normalised for storage.
+
+    Each entry must be a ViewportInput; the result holds plain dicts
+    (``width``, ``height``, ``device_type`` — auto-detected when absent —
+    and ``browsers``). Two viewports of the same width and height are rejected:
+    they would be saved to the same file (``{w}x{h}_{browser}``). Errors
+    surface as the usual 422 (``viewports -> 1 -> width``).
+    """
+    if viewports is None:
+        return None
+    entries = _VIEWPORT_INPUTS.validate_python(viewports)
+    seen: set[tuple[int, int]] = set()
+    for entry in entries:
+        size = (entry.width, entry.height)
+        if size in seen:
+            raise PydanticCustomError(
+                "duplicate_viewport",
+                "Duplicate viewport {size}: two viewports with the same width "
+                "and height would be saved to the same file",
+                {"size": f"{entry.width}x{entry.height}"},
+            )
+        seen.add(size)
+    return [entry.model_dump() for entry in entries]
 
 
 # ---------------------------------------------------------------------------
@@ -153,16 +213,32 @@ class ProjectConfig(SQLModel, table=True):
     timeout: int = Field(default=30000)
 
 
+WaitUntil = Literal["load", "domcontentloaded", "networkidle"]
+# Project capture timeout (ms) the API accepts.
+CAPTURE_TIMEOUT_MIN_MS = 1000
+CAPTURE_TIMEOUT_MAX_MS = 120000
+
+
 class ProjectConfigUpdate(SQLModel):
     default_browsers: list[str] | None = None
+    # Validated as ViewportInput entries and stored as plain dicts.
     viewports: list[dict[str, Any]] | None = None
-    wait_until: str | None = None
-    timeout: int | None = None
+    wait_until: WaitUntil | None = None
+    timeout: int | None = Field(
+        default=None, ge=CAPTURE_TIMEOUT_MIN_MS, le=CAPTURE_TIMEOUT_MAX_MS
+    )
 
     @field_validator("default_browsers")
     @classmethod
     def validate_default_browsers(cls, v: list[str] | None) -> list[str] | None:
         return validate_browser_names(v) if v is not None else None
+
+    @field_validator("viewports")
+    @classmethod
+    def validate_viewports(
+        cls, v: list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
+        return validate_viewport_inputs(v)
 
 
 class ProjectConfigRead(SQLModel):
