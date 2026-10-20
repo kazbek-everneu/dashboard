@@ -13,12 +13,20 @@ import QuickPinchZoom, {
 } from "react-quick-pinch-zoom"
 import {
   AlertTriangle,
+  ImageOff,
   Maximize2,
   Minus,
   Plus,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ButtonGroup } from "@/components/ui/button-group"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Spinner } from "@/components/ui/spinner"
+import { StateMessage } from "@/components/ui/StateMessage"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Screenshot } from "@/types"
 
 const MIN_ZOOM = 1
@@ -217,53 +225,74 @@ export const ScreenshotViewport = forwardRef<
 
   if (screenshot.status !== "ok") {
     return (
-      <div className="glass-card flex flex-col items-center justify-center gap-3 py-24">
-        <AlertTriangle className="h-8 w-8 text-destructive" />
-        <p className="text-sm font-medium text-destructive">Screenshot failed</p>
-        {screenshot.error_message && (
-          <p className="max-w-md px-4 text-center text-xs text-muted-foreground">
-            {screenshot.error_message}
-          </p>
-        )}
-      </div>
+      <StateMessage
+        tone="destructive"
+        icon={<AlertTriangle />}
+        title="Screenshot failed"
+        description={screenshot.error_message ?? undefined}
+        className="min-h-[420px] border-solid bg-card"
+      />
     )
   }
 
   if (!screenshot.signed_url) {
     return (
-      <div className="glass-card flex flex-col items-center justify-center gap-3 py-24 text-muted-foreground">
-        <AlertTriangle className="h-8 w-8" />
-        <p className="text-sm">Not available</p>
-      </div>
+      <StateMessage
+        icon={<ImageOff />}
+        title="Not available"
+        className="min-h-[420px] border-solid bg-card"
+      />
     )
   }
 
   return (
-    <div className={cn("glass-card overflow-hidden", className)}>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b surface-divider px-4 py-2.5">
-        <span className="technical-caption">Zoom: {Math.round(zoomFactor * 100)}%</span>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Button variant="outline" size="sm" onClick={() => zoomByStep(-BUTTON_ZOOM_STEP)}>
-            <Minus className="h-3.5 w-3.5" />
-          </Button>
+    <div className={cn("overflow-hidden rounded-xl border bg-card", className)}>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+        <span className="text-xs tabular-nums text-muted-foreground">
+          Zoom {Math.round(zoomFactor * 100)}%
+        </span>
+        <ButtonGroup aria-label="Zoom">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label="Zoom out"
+                onClick={() => zoomByStep(-BUTTON_ZOOM_STEP)}
+              >
+                <Minus />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Zoom out</TooltipContent>
+          </Tooltip>
           <Button variant="outline" size="sm" onClick={() => resetToBase(true)}>
-            <Maximize2 className="mr-1 h-3.5 w-3.5" />
+            <Maximize2 data-icon="inline-start" />
             Fit
           </Button>
-          <Button variant="outline" size="sm" onClick={() => zoomByStep(BUTTON_ZOOM_STEP)}>
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
-        </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label="Zoom in"
+                onClick={() => zoomByStep(BUTTON_ZOOM_STEP)}
+              >
+                <Plus />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Zoom in</TooltipContent>
+          </Tooltip>
+        </ButtonGroup>
       </div>
 
       {screenshot.captured_with_unstable_dom && (
-        <div className="flex items-start gap-2 border-b border-amber-600 bg-amber-100 px-4 py-3 text-sm text-amber-700 dark:bg-amber-950 dark:text-amber-300">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
+        <Alert className="rounded-none border-0 border-b bg-warning/10 text-warning">
+          <AlertTriangle />
+          <AlertDescription className="text-foreground/80">
             {screenshot.error_message ??
               "Captured with unstable DOM. Content may still have been settling."}
-          </span>
-        </div>
+          </AlertDescription>
+        </Alert>
       )}
 
       <div
@@ -276,16 +305,17 @@ export const ScreenshotViewport = forwardRef<
         onDoubleClick={handleDoubleClick}
       >
         {!imageVisible && !imageFailed && !isRefreshingSignedUrl && (
-          <div className="absolute inset-0 animate-pulse bg-muted" />
+          <Skeleton className="absolute inset-0 rounded-none" />
         )}
 
         {imageFailed && !isRefreshingSignedUrl ? (
-          <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 px-4">
-            <AlertTriangle className="h-8 w-8 text-destructive" />
-            <p className="text-center text-sm text-destructive">
-              Could not load image after URL refresh.
-            </p>
-          </div>
+          <StateMessage
+            tone="destructive"
+            icon={<ImageOff />}
+            title="Could not load the image"
+            description="The secure link was refreshed, but the image still failed to load."
+            className="h-full rounded-none border-0"
+          />
         ) : (
           <QuickPinchZoom
             ref={pinchZoomRef}
@@ -336,9 +366,10 @@ export const ScreenshotViewport = forwardRef<
         )}
 
         {isRefreshingSignedUrl && (
-          <div className="absolute bottom-3 right-3 border bg-background/95 px-2.5 py-1 text-xs text-muted-foreground">
-            Refreshing secure URL...
-          </div>
+          <Badge variant="secondary" className="absolute right-3 bottom-3 gap-1.5">
+            <Spinner className="size-3" />
+            Refreshing secure URL…
+          </Badge>
         )}
       </div>
     </div>

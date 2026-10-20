@@ -8,13 +8,16 @@ import {
   Smartphone,
   AlertTriangle,
   RotateCcw,
-  Loader2,
 } from "lucide-react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { extractApiError, getDeviceType } from "@/lib/helpers"
+import { browserLabel as formatBrowser } from "@/lib/task-formatters"
 import { BrowserIcon } from "@/components/ui/BrowserIcon"
+import { Button } from "@/components/ui/button"
+import { Spinner } from "@/components/ui/spinner"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { screenshotsApi } from "@/api/screenshots"
 import { buildImgUrl, getRenderedStripDimensions } from "./screenshot-utils"
 import type { Screenshot } from "@/types"
@@ -29,9 +32,16 @@ interface ScreenshotCardProps {
   screenshot: Screenshot
   onClick: () => void
   variant?: "grid" | "strip"
-  selectable?: boolean
-  selected?: boolean
-  onToggleSelect?: () => void
+}
+
+/** Icon-only footer action with a tooltip. */
+function FooterAction({ label, children }: { label: string; children: React.ReactElement }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
 }
 
 function ScreenshotCardFooter({ screenshot: s }: { screenshot: Screenshot }) {
@@ -41,10 +51,7 @@ function ScreenshotCardFooter({ screenshot: s }: { screenshot: Screenshot }) {
     `${s.width}x${s.height}`,
     s.browser,
   ].join("_") + `.${s.file_format === "jpeg" ? "jpg" : s.file_format}`
-  const browserLabel =
-    s.browser === "webkit"
-      ? "Safari (WebKit)"
-      : s.browser.charAt(0).toUpperCase() + s.browser.slice(1)
+  const browserLabel = formatBrowser(s.browser)
 
   const deviceType = getDeviceType(s.width)
   const DeviceIcon = deviceIcons[deviceType]
@@ -76,81 +83,79 @@ function ScreenshotCardFooter({ screenshot: s }: { screenshot: Screenshot }) {
     recaptureMutation.mutate()
   }
 
+  const statusLabel =
+    s.status === "failed" ? "Failed" : s.captured_with_unstable_dom ? "Captured with unstable DOM" : "OK"
+
   return (
-    <div className="flex min-w-0 items-center justify-between gap-3 border-t surface-divider px-3 py-2.5">
+    <div className="flex min-w-0 items-center justify-between gap-2 border-t px-3 py-2">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
         <span title={deviceTitle} className="inline-flex shrink-0">
           <DeviceIcon size={12} className="text-muted-foreground" />
         </span>
-        <span title={browserLabel}>
+        <span title={browserLabel} className="inline-flex shrink-0">
           <BrowserIcon browser={s.browser} size={13} />
         </span>
         <span
-          className="truncate text-xs font-mono leading-none text-muted-foreground"
-          title={`${s.width} x ${s.height}`}
+          className="truncate font-mono text-xs leading-none text-muted-foreground"
+          title={`${s.width} × ${s.height}`}
         >
-          {s.width}x{s.height}
+          {s.width}×{s.height}
         </span>
         <span
           className={cn(
-            "inline-block h-1.5 w-1.5 shrink-0",
-            s.status === "failed"
-              ? "bg-red-500"
-              : s.captured_with_unstable_dom
-                ? "bg-amber-500"
-                : "bg-green-500",
+            "inline-block size-1.5 shrink-0 rounded-full",
+            s.status === "failed" ? "bg-destructive" : s.captured_with_unstable_dom ? "bg-warning" : "bg-success",
           )}
-          title={
-            s.status === "failed"
-              ? "Failed"
-              : s.captured_with_unstable_dom
-                ? "Captured with unstable DOM"
-                : "OK"
-          }
+          title={statusLabel}
+          aria-label={statusLabel}
         />
         {s.captured_with_unstable_dom && (
-          <span
-            title={s.error_message ?? "Captured with unstable DOM"}
-            className="inline-flex shrink-0"
-          >
-            <AlertTriangle size={12} className="text-amber-500" />
+          <span title={s.error_message ?? "Captured with unstable DOM"} className="inline-flex shrink-0">
+            <AlertTriangle size={12} className="text-warning" />
           </span>
         )}
       </div>
 
-      <div className="flex shrink-0 items-center gap-0.5">
-        <button
-          type="button"
-          onClick={handleRecapture}
-          disabled={isRecapturing}
-          title={isRecapturing ? "Re-capturing…" : "Re-capture this screenshot"}
-          className="p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {isRecapturing ? (
-            <Loader2 size={12} className="animate-spin" />
-          ) : (
-            <RotateCcw size={12} />
-          )}
-        </button>
+      <div className="flex shrink-0 items-center">
+        <FooterAction label={isRecapturing ? "Re-capturing…" : "Re-capture this screenshot"}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={handleRecapture}
+            disabled={isRecapturing}
+            aria-label="Re-capture this screenshot"
+            className="text-muted-foreground"
+          >
+            {isRecapturing ? <Spinner /> : <RotateCcw />}
+          </Button>
+        </FooterAction>
         {s.signed_url && s.status === "ok" && (
           <>
-            <button
-              type="button"
-              onClick={handleCopy}
-              title="Copy URL"
-              className="p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              {copied ? <Check size={12} /> : <Copy size={12} />}
-            </button>
-            <a
-              href={imgUrl}
-              download={downloadFilename}
-              onClick={(e) => e.stopPropagation()}
-              title="Download"
-              className="p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              <Download size={12} />
-            </a>
+            <FooterAction label={copied ? "Copied" : "Copy image URL"}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                onClick={handleCopy}
+                aria-label="Copy image URL"
+                className="text-muted-foreground"
+              >
+                {copied ? <Check /> : <Copy />}
+              </Button>
+            </FooterAction>
+            <FooterAction label="Download">
+              <Button asChild variant="ghost" size="icon-xs" className="text-muted-foreground">
+                <a
+                  href={imgUrl}
+                  download={downloadFilename}
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label="Download screenshot"
+                >
+                  <Download />
+                </a>
+              </Button>
+            </FooterAction>
           </>
         )}
       </div>
@@ -162,9 +167,6 @@ export function ScreenshotCard({
   screenshot: s,
   onClick,
   variant = "grid",
-  selectable = false,
-  selected = false,
-  onToggleSelect,
 }: ScreenshotCardProps) {
   const imgUrl = buildImgUrl(s)
   const imgAlt = `${s.url} @ ${s.width}x${s.height} (${s.browser})`
@@ -191,10 +193,9 @@ export function ScreenshotCard({
   return (
     <div
       className={cn(
-        "glass-card hover-lift overflow-hidden",
+        "overflow-hidden rounded-xl border bg-card transition-colors hover:border-ring/60",
         isStrip && "strip-card",
         s.status === "failed" && "border-destructive/50",
-        selected && "ring-2 ring-foreground/50",
       )}
       style={isStrip ? { width: `${stripDimensions.width}px` } : undefined}
     >
@@ -211,7 +212,7 @@ export function ScreenshotCard({
               <img src={imgUrl} alt={imgAlt} className="h-full w-full object-cover opacity-30" />
             )}
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-background/40">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <Spinner className="size-5 text-muted-foreground" />
               <span className="text-xs font-medium text-muted-foreground">Recapturing…</span>
             </div>
           </div>
@@ -279,23 +280,6 @@ export function ScreenshotCard({
           </button>
         )}
 
-        {selectable && onToggleSelect && (
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation()
-              onToggleSelect()
-            }}
-            className={cn(
-              "absolute right-2 top-2 z-10 border px-2 py-1 text-[11px] font-medium",
-              selected
-                ? "bg-foreground text-background"
-                : "bg-background/90 text-foreground hover:bg-background",
-            )}
-          >
-            {selected ? "Selected" : "Select"}
-          </button>
-        )}
       </div>
       <ScreenshotCardFooter screenshot={s} />
     </div>

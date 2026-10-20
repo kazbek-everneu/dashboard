@@ -1,10 +1,41 @@
-import { useState } from "react"
-import { Monitor, Tablet, Smartphone, PanelLeft, AlertTriangle, CheckCircle2 } from "lucide-react"
+import type { ReactNode } from "react"
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  GalleryHorizontal,
+  LayoutGrid,
+  Minus,
+  Monitor,
+  PanelLeft,
+  Smartphone,
+  Tablet,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
+import { browserLabel } from "@/lib/task-formatters"
 import { BrowserIcon } from "@/components/ui/BrowserIcon"
-import { Checkbox } from "@/components/ui/checkbox"
-import { FilterToolbar } from "@/components/ui/FilterToolbar"
-import { MenuSurface } from "@/components/ui/MenuSurface"
+import { Button } from "@/components/ui/button"
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from "@/components/ui/command"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Toggle } from "@/components/ui/toggle"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type {
   ViewportItem,
   BrowserItem,
@@ -53,10 +84,13 @@ const deviceIcons = {
   mobile: Smartphone,
 }
 
-function browserLabel(browser: string): string {
-  if (browser === "msedge") return "Edge"
-  if (browser === "webkit") return "Safari"
-  return browser.charAt(0).toUpperCase() + browser.slice(1)
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+/** "All" is checked when nothing (or everything) is selected, mixed otherwise. */
+function allState(selected: number, total: number): boolean | "indeterminate" {
+  return selected === 0 || selected === total ? true : "indeterminate"
 }
 
 export function ViewportFilterBar({
@@ -86,166 +120,227 @@ export function ViewportFilterBar({
   failedCount,
 }: Props) {
   return (
-    <FilterToolbar
-      className="border-0 border-b surface-divider bg-[var(--surface-1)] shadow-none"
-      filters={
-        <>
-          <StatusFilterControl
-            statusFilter={statusFilter}
-            onSetStatusFilter={onSetStatusFilter}
-            okCount={okCount}
-            failedCount={failedCount}
-          />
-          {layoutMode === "dropdown" && (
-            <PagesDropdown
-              pages={pages}
-              selectedPages={selectedPages}
-              onToggle={onTogglePage}
-              onClear={onClearPages}
-            />
-          )}
-          <ViewportDropdown
-            viewports={viewports}
-            selectedViewports={selectedViewports}
-            onToggle={onToggleViewport}
-            onClear={onClearViewports}
-          />
-          {availableDeviceTypes.length > 1 && (
-            <DeviceDropdown
-              devices={availableDeviceTypes}
-              selectedDevices={selectedDevices}
-              onToggle={onToggleDevice}
-              onClear={onClearDevices}
-            />
-          )}
-          {availableBrowsers.length > 1 && (
-            <BrowserDropdown
-              browsers={availableBrowsers}
-              selectedBrowsers={selectedBrowsers}
-              onToggle={onToggleBrowser}
-              onClear={onClearBrowsers}
-            />
-          )}
-        </>
-      }
-      actions={
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex overflow-hidden border">
-            <button
-              type="button"
-              onClick={() => onSetDisplayMode("grid")}
-              title="Show screenshots in grid view"
-              className={cn(
-                "px-3 py-2 text-xs font-medium transition-colors",
-                displayMode === "grid"
-                  ? "bg-background text-foreground"
-                  : "bg-background text-[color:var(--text-secondary)] hover:bg-muted hover:text-foreground",
-              )}
-            >
-              Grid
-            </button>
-            <button
-              type="button"
-              onClick={() => onSetDisplayMode("strip")}
-              title="Show screenshots in horizontal strip view"
-              className={cn(
-                "border-l px-3 py-2 text-xs font-medium transition-colors",
-                displayMode === "strip"
-                  ? "bg-background text-foreground"
-                  : "bg-background text-[color:var(--text-secondary)] hover:bg-muted hover:text-foreground",
-              )}
-            >
-              Horizontal strip
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={onToggleLayout}
-            title={layoutMode === "sidebar" ? "Switch to dropdown mode" : "Switch to sidebar mode"}
-            className={cn(
-              "border px-3 py-2 text-xs font-medium transition-colors",
-              layoutMode === "sidebar"
-                ? "bg-background text-foreground"
-                : "bg-background text-[color:var(--text-secondary)] hover:bg-muted hover:text-foreground",
-            )}
-          >
-            <span className="flex items-center gap-2">
-              <PanelLeft size={14} />
-              {layoutMode === "sidebar" ? "Sidebar" : "Dropdown"}
-            </span>
-          </button>
-        </div>
-      }
-    />
-  )
-}
-
-// ── Shared dropdown shell ────────────────────────────────────────────────────
-
-// ── Status segmented control (All / OK / Failed) ─────────────────────────────
-
-function StatusFilterControl({
-  statusFilter,
-  onSetStatusFilter,
-  okCount,
-  failedCount,
-}: {
-  statusFilter: StatusFilter
-  onSetStatusFilter: (status: StatusFilter) => void
-  okCount: number
-  failedCount: number
-}) {
-  const base = "flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors"
-  const active = "bg-foreground text-background"
-  const inactive =
-    "bg-background text-[color:var(--text-secondary)] hover:bg-muted hover:text-foreground"
-
-  return (
-    <div className="flex overflow-hidden border">
-      <button
-        type="button"
-        onClick={() => onSetStatusFilter("all")}
-        title="Show all screenshots"
-        className={cn(base, statusFilter === "all" ? active : inactive)}
-      >
-        All
-      </button>
-      <button
-        type="button"
-        onClick={() => onSetStatusFilter("ok")}
-        title="Show successful captures only"
-        className={cn(base, "border-l", statusFilter === "ok" ? active : inactive)}
-      >
-        <CheckCircle2 size={12} />
-        OK
-        <span className="tabular-nums opacity-70">{okCount}</span>
-      </button>
-      {failedCount > 0 && (
-        <button
-          type="button"
-          onClick={() => onSetStatusFilter("failed")}
-          title="Show failed captures only"
-          className={cn(
-            base,
-            "border-l",
-            statusFilter === "failed"
-              ? "bg-destructive text-destructive-foreground"
-              : "bg-background text-destructive hover:bg-destructive/10",
-          )}
+    <div className="flex flex-col gap-2 border-b p-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          spacing={0}
+          value={statusFilter}
+          // Re-clicking the active item reports "" — keep the current filter.
+          onValueChange={(value) => value && onSetStatusFilter(value as StatusFilter)}
+          aria-label="Capture status"
         >
-          <AlertTriangle size={12} />
-          Failed
-          <span className="tabular-nums opacity-80">{failedCount}</span>
-        </button>
-      )}
+          <ToggleGroupItem value="all">All</ToggleGroupItem>
+          <ToggleGroupItem value="ok">
+            <CheckCircle2 />
+            OK
+            <span className="tabular-nums text-muted-foreground">{okCount}</span>
+          </ToggleGroupItem>
+          {failedCount > 0 && (
+            <ToggleGroupItem
+              value="failed"
+              className="text-destructive data-[state=on]:bg-destructive/10 data-[state=on]:text-destructive"
+            >
+              <AlertTriangle />
+              Failed
+              <span className="tabular-nums">{failedCount}</span>
+            </ToggleGroupItem>
+          )}
+        </ToggleGroup>
+
+        {layoutMode === "dropdown" && (
+          <PagesFilter
+            pages={pages}
+            selectedPages={selectedPages}
+            onToggle={onTogglePage}
+            onClear={onClearPages}
+          />
+        )}
+
+        <CheckboxMenu
+          label={
+            selectedViewports.length === 0 || selectedViewports.length === viewports.length
+              ? "All viewports"
+              : selectedViewports.length === 1
+                ? (viewports.find((v) => v.key === selectedViewports[0])?.label ?? selectedViewports[0])
+                : `${selectedViewports.length} viewports`
+          }
+          allChecked={allState(selectedViewports.length, viewports.length)}
+          onClear={onClearViewports}
+          items={viewports.map((vp) => ({
+            key: vp.key,
+            label: <span className="font-mono">{vp.label}</span>,
+            count: vp.count,
+            checked: selectedViewports.includes(vp.key),
+            onToggle: () => onToggleViewport(vp.key),
+          }))}
+        />
+
+        {availableDeviceTypes.length > 1 && (
+          <CheckboxMenu
+            label={
+              selectedDevices.length === 0 || selectedDevices.length === availableDeviceTypes.length
+                ? "All devices"
+                : selectedDevices.length === 1
+                  ? capitalize(selectedDevices[0])
+                  : `${selectedDevices.length} devices`
+            }
+            allChecked={allState(selectedDevices.length, availableDeviceTypes.length)}
+            onClear={onClearDevices}
+            items={availableDeviceTypes.map(({ device, count }) => {
+              const Icon = deviceIcons[device]
+              return {
+                key: device,
+                label: (
+                  <>
+                    <Icon />
+                    {capitalize(device)}
+                  </>
+                ),
+                count,
+                checked: selectedDevices.includes(device),
+                onToggle: () => onToggleDevice(device),
+              }
+            })}
+          />
+        )}
+
+        {availableBrowsers.length > 1 && (
+          <CheckboxMenu
+            label={
+              selectedBrowsers.length === 0 || selectedBrowsers.length === availableBrowsers.length
+                ? "All browsers"
+                : selectedBrowsers.length === 1
+                  ? browserLabel(selectedBrowsers[0])
+                  : `${selectedBrowsers.length} browsers`
+            }
+            allChecked={allState(selectedBrowsers.length, availableBrowsers.length)}
+            onClear={onClearBrowsers}
+            items={availableBrowsers.map(({ browser, count }) => ({
+              key: browser,
+              label: (
+                <>
+                  <BrowserIcon browser={browser} size={14} />
+                  {browserLabel(browser)}
+                </>
+              ),
+              count,
+              checked: selectedBrowsers.includes(browser),
+              onToggle: () => onToggleBrowser(browser),
+            }))}
+          />
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          spacing={0}
+          value={displayMode}
+          onValueChange={(value) => value && onSetDisplayMode(value as "grid" | "strip")}
+          aria-label="Screenshot layout"
+        >
+          <ToggleGroupItem value="grid" title="Show screenshots in a grid">
+            <LayoutGrid />
+            Grid
+          </ToggleGroupItem>
+          <ToggleGroupItem value="strip" title="Show screenshots in a horizontal strip">
+            <GalleryHorizontal />
+            Strip
+          </ToggleGroupItem>
+        </ToggleGroup>
+
+        <Toggle
+          variant="outline"
+          size="sm"
+          pressed={layoutMode === "sidebar"}
+          onPressedChange={onToggleLayout}
+          title={layoutMode === "sidebar" ? "Pick pages from a dropdown" : "Show pages in a sidebar"}
+        >
+          <PanelLeft />
+          Pages sidebar
+        </Toggle>
+      </div>
     </div>
   )
 }
 
-// ── Pages dropdown (dropdown mode only) ─────────────────────────────────────
+// ── Checkbox dropdown (viewports / devices / browsers) ───────────────────────
 
-function PagesDropdown({
+interface CheckboxMenuItem {
+  key: string
+  label: ReactNode
+  count: number
+  checked: boolean
+  onToggle: () => void
+}
+
+function CheckboxMenu({
+  label,
+  allChecked,
+  onClear,
+  items,
+}: {
+  label: ReactNode
+  allChecked: boolean | "indeterminate"
+  onClear: () => void
+  items: CheckboxMenuItem[]
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm">
+          {label}
+          <ChevronDown data-icon="inline-end" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-48">
+        {/* preventDefault keeps the menu open while several boxes are ticked */}
+        <DropdownMenuCheckboxItem
+          checked={allChecked}
+          onCheckedChange={onClear}
+          onSelect={(event) => event.preventDefault()}
+        >
+          All
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        {items.map((item) => (
+          <DropdownMenuCheckboxItem
+            key={item.key}
+            checked={item.checked}
+            onCheckedChange={item.onToggle}
+            onSelect={(event) => event.preventDefault()}
+          >
+            {item.label}
+            <DropdownMenuShortcut className="tabular-nums">{item.count}</DropdownMenuShortcut>
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+// ── Pages filter (dropdown mode only): searchable list ──────────────────────
+
+function CheckIndicator({ state }: { state: boolean | "indeterminate" }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex size-4 shrink-0 items-center justify-center rounded-[4px] border",
+        state ? "border-primary bg-primary text-primary-foreground" : "border-input",
+      )}
+    >
+      {state === "indeterminate" ? <Minus className="size-3" /> : state ? <Check className="size-3" /> : null}
+    </span>
+  )
+}
+
+function PagesFilter({
   pages,
   selectedPages,
   onToggle,
@@ -256,281 +351,56 @@ function PagesDropdown({
   onToggle: (url: string) => void
   onClear: () => void
 }) {
-  const [search, setSearch] = useState("")
-
-  const allPagesSelected =
-    selectedPages.length === 0 || selectedPages.length === pages.length
-  const somePagesSelected =
-    selectedPages.length > 0 && selectedPages.length < pages.length
-
-  let triggerLabel: React.ReactNode
-  if (allPagesSelected) {
-    triggerLabel = <span>All Pages</span>
+  let triggerLabel: ReactNode
+  if (selectedPages.length === 0 || selectedPages.length === pages.length) {
+    triggerLabel = "All pages"
   } else if (selectedPages.length === 1) {
     const page = pages.find((p) => p.url === selectedPages[0])
-    triggerLabel = (
-      <span className="font-mono max-w-[140px] truncate">
-        {page?.label ?? selectedPages[0]}
-      </span>
-    )
+    triggerLabel = <span className="max-w-[160px] truncate font-mono">{page?.label ?? selectedPages[0]}</span>
   } else {
-    triggerLabel = <span>{selectedPages.length} Pages</span>
+    triggerLabel = `${selectedPages.length} pages`
   }
 
-  const allCheckedState: boolean | "indeterminate" = somePagesSelected
-    ? "indeterminate"
-    : true
-
-  const filtered = search
-    ? pages.filter((p) => p.url.toLowerCase().includes(search.toLowerCase()))
-    : pages
-
   return (
-    <MenuSurface trigger={triggerLabel}>
-      {/* Search input */}
-      <div className="px-2 pt-1 pb-1">
-        <input
-          type="text"
-          placeholder="Search pages…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full border border-border bg-background px-2 py-1 text-xs outline-none focus:border-foreground/40"
-          onClick={(e) => e.stopPropagation()}
-        />
-      </div>
-
-      {/* "All" row */}
-      <label className="flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-accent text-xs">
-        <Checkbox
-          checked={allCheckedState}
-          onCheckedChange={() => onClear()}
-        />
-        <span>All</span>
-      </label>
-
-      <div className="max-h-[260px] overflow-y-auto">
-        {filtered.map((page) => {
-          const checked = selectedPages.includes(page.url)
-          return (
-            <label
-              key={page.url}
-              className="flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-accent text-xs"
-              title={page.url}
-            >
-              <Checkbox
-                checked={checked}
-                onCheckedChange={() => onToggle(page.url)}
-              />
-              {page.hasFailed && (
-                <span className="h-1.5 w-1.5 shrink-0 bg-destructive" />
-              )}
-              <span className="font-mono flex-1 truncate">{page.label}</span>
-              <span className="text-muted-foreground shrink-0">({page.count})</span>
-            </label>
-          )
-        })}
-        {filtered.length === 0 && (
-          <p className="px-3 py-2 text-xs text-muted-foreground">No pages match.</p>
-        )}
-      </div>
-    </MenuSurface>
-  )
-}
-
-// ── Viewport dropdown ────────────────────────────────────────────────────────
-
-function ViewportDropdown({
-  viewports,
-  selectedViewports,
-  onToggle,
-  onClear,
-}: {
-  viewports: ViewportItem[]
-  selectedViewports: string[]
-  onToggle: (key: string) => void
-  onClear: () => void
-}) {
-  const allViewportsSelected =
-    selectedViewports.length === 0 || selectedViewports.length === viewports.length
-
-  let triggerLabel: React.ReactNode
-  if (allViewportsSelected) {
-    triggerLabel = <span>All Viewports</span>
-  } else if (selectedViewports.length === 1) {
-    const vp = viewports.find((v) => v.key === selectedViewports[0])
-    triggerLabel = <span className="font-mono">{vp?.label ?? selectedViewports[0]}</span>
-  } else {
-    triggerLabel = <span>{selectedViewports.length} Viewports</span>
-  }
-
-  const allChecked = selectedViewports.length === 0
-
-  return (
-    <MenuSurface trigger={triggerLabel}>
-      {/* "All" row */}
-      <label className="flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-accent text-xs">
-        <Checkbox
-          checked={allChecked}
-          onCheckedChange={() => onClear()}
-        />
-        <span>All</span>
-      </label>
-
-      {viewports.map((vp) => {
-        const checked = selectedViewports.includes(vp.key)
-        return (
-          <label
-            key={vp.key}
-            className="flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-accent text-xs"
-          >
-            <Checkbox
-              checked={checked}
-              onCheckedChange={() => onToggle(vp.key)}
-            />
-            <span className="font-mono flex-1">{vp.label}</span>
-            <span className="text-muted-foreground">({vp.count})</span>
-          </label>
-        )
-      })}
-    </MenuSurface>
-  )
-}
-
-// ── Device dropdown ──────────────────────────────────────────────────────────
-
-function DeviceDropdown({
-  devices,
-  selectedDevices,
-  onToggle,
-  onClear,
-}: {
-  devices: DeviceItem[]
-  selectedDevices: string[]
-  onToggle: (device: string) => void
-  onClear: () => void
-}) {
-  const allDevicesSelected =
-    selectedDevices.length === 0 || selectedDevices.length === devices.length
-  const someDevicesSelected =
-    selectedDevices.length > 0 && selectedDevices.length < devices.length
-
-  let triggerLabel: React.ReactNode
-  if (allDevicesSelected) {
-    triggerLabel = <span>All Devices</span>
-  } else if (selectedDevices.length === 1) {
-    const d = selectedDevices[0] as keyof typeof deviceIcons
-    const Icon = deviceIcons[d] ?? Monitor
-    triggerLabel = (
-      <span className="flex items-center gap-1.5">
-        <Icon size={12} />
-        {d.charAt(0).toUpperCase() + d.slice(1)}
-      </span>
-    )
-  } else {
-    triggerLabel = <span>{selectedDevices.length} Devices</span>
-  }
-
-  const allCheckedState: boolean | "indeterminate" = someDevicesSelected
-    ? "indeterminate"
-    : true
-
-  return (
-    <MenuSurface trigger={triggerLabel}>
-      {/* "All" row */}
-      <label className="flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-accent text-xs">
-        <Checkbox
-          checked={allCheckedState}
-          onCheckedChange={() => onClear()}
-        />
-        <span>All</span>
-      </label>
-
-      {devices.map(({ device, count }) => {
-        const checked = selectedDevices.includes(device)
-        const Icon = deviceIcons[device]
-        return (
-          <label
-            key={device}
-            className="flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-accent text-xs"
-          >
-            <Checkbox
-              checked={checked}
-              onCheckedChange={() => onToggle(device)}
-            />
-            <Icon size={12} className="text-muted-foreground" />
-            <span className="flex-1">{device.charAt(0).toUpperCase() + device.slice(1)}</span>
-            <span className="text-muted-foreground">({count})</span>
-          </label>
-        )
-      })}
-    </MenuSurface>
-  )
-}
-
-// ── Browser dropdown ─────────────────────────────────────────────────────────
-
-function BrowserDropdown({
-  browsers,
-  selectedBrowsers,
-  onToggle,
-  onClear,
-}: {
-  browsers: BrowserItem[]
-  selectedBrowsers: string[]
-  onToggle: (browser: string) => void
-  onClear: () => void
-}) {
-  const allBrowsersSelected =
-    selectedBrowsers.length === 0 || selectedBrowsers.length === browsers.length
-  const someBrowsersSelected =
-    selectedBrowsers.length > 0 && selectedBrowsers.length < browsers.length
-
-  let triggerLabel: React.ReactNode
-  if (allBrowsersSelected) {
-    triggerLabel = <span>All Browsers</span>
-  } else if (selectedBrowsers.length === 1) {
-    triggerLabel = (
-      <span className="flex items-center gap-1.5">
-        <BrowserIcon browser={selectedBrowsers[0]} size={14} />
-        {browserLabel(selectedBrowsers[0])}
-      </span>
-    )
-  } else {
-    triggerLabel = <span>{selectedBrowsers.length} Browsers</span>
-  }
-
-  const allCheckedState: boolean | "indeterminate" = someBrowsersSelected
-    ? "indeterminate"
-    : true
-
-  return (
-    <MenuSurface trigger={triggerLabel}>
-      {/* "All" row */}
-      <label className="flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-accent text-xs">
-        <Checkbox
-          checked={allCheckedState}
-          onCheckedChange={() => onClear()}
-        />
-        <span>All</span>
-      </label>
-
-      {browsers.map(({ browser, count }) => {
-        const checked = selectedBrowsers.includes(browser)
-        return (
-          <label
-            key={browser}
-            className="flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-accent text-xs"
-          >
-            <Checkbox
-              checked={checked}
-              onCheckedChange={() => onToggle(browser)}
-            />
-            <BrowserIcon browser={browser} size={14} />
-            <span className="flex-1">{browserLabel(browser)}</span>
-            <span className="text-muted-foreground">({count})</span>
-          </label>
-        )
-      })}
-    </MenuSurface>
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm">
+          {triggerLabel}
+          <ChevronDown data-icon="inline-end" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 p-0">
+        <Command>
+          <CommandInput placeholder="Search pages…" />
+          <CommandList>
+            <CommandEmpty>No pages match.</CommandEmpty>
+            <CommandGroup>
+              <CommandItem value="__all__" onSelect={onClear}>
+                <CheckIndicator state={allState(selectedPages.length, pages.length)} />
+                All pages
+              </CommandItem>
+            </CommandGroup>
+            <CommandSeparator />
+            <CommandGroup>
+              {pages.map((page) => (
+                <CommandItem
+                  key={page.url}
+                  value={page.url}
+                  title={page.url}
+                  onSelect={() => onToggle(page.url)}
+                >
+                  <CheckIndicator state={selectedPages.includes(page.url)} />
+                  {page.hasFailed && (
+                    <span className="size-1.5 shrink-0 rounded-full bg-destructive" aria-label="has failures" />
+                  )}
+                  <span className="flex-1 truncate font-mono text-xs">{page.label}</span>
+                  <span className="text-xs tabular-nums text-muted-foreground">{page.count}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   )
 }

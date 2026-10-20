@@ -4,6 +4,7 @@ import { useViewerState, type DisplayMode } from "@/hooks/useViewerState"
 import { PageSidebar } from "@/components/screenshots/PageSidebar"
 import { ViewportFilterBar } from "@/components/screenshots/ViewportFilterBar"
 import { ScreenshotCard } from "@/components/screenshots/ScreenshotCard"
+import { Separator } from "@/components/ui/separator"
 import { StateMessage } from "@/components/ui/StateMessage"
 import type { Screenshot } from "@/types"
 
@@ -111,6 +112,7 @@ export default function ScreenshotsPage({ taskId, screenshots }: Props) {
           compact
           title="No screenshots found"
           description="Try changing the current page, viewport, device, or browser filters."
+          className="border-0"
         />
       ) : isPageMode ? (
         <SinglePageView
@@ -159,7 +161,7 @@ export default function ScreenshotsPage({ taskId, screenshots }: Props) {
 
   if (layoutMode === "sidebar") {
     return (
-      <div className="glass-card flex min-h-[520px] overflow-hidden">
+      <div className="flex min-h-[520px] flex-col overflow-hidden rounded-xl border bg-card md:flex-row">
         <PageSidebar
           pages={uniquePages}
           totalCount={sidebarTotal}
@@ -175,7 +177,7 @@ export default function ScreenshotsPage({ taskId, screenshots }: Props) {
   }
 
   return (
-    <div className="glass-card flex min-h-[520px] flex-col overflow-hidden">
+    <div className="flex min-h-[520px] flex-col overflow-hidden rounded-xl border bg-card">
       {filterBar}
       {content}
     </div>
@@ -192,10 +194,10 @@ const GroupedView = memo(function GroupedView({
   displayMode: DisplayMode
 }) {
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-5">
       {groups.map((group, i) => (
         <div key={group.key}>
-          {i > 0 && <div className="mb-5 border-t surface-divider" />}
+          {i > 0 && <Separator className="mb-5" />}
           <div className="flex flex-col gap-1 pb-3 sm:flex-row sm:items-center sm:justify-between">
             <a
               href={group.url}
@@ -206,7 +208,7 @@ const GroupedView = memo(function GroupedView({
             >
               {group.url}
             </a>
-            <span className="technical-caption">
+            <span className="shrink-0 text-xs text-muted-foreground">
               {group.screenshots.length} capture{group.screenshots.length === 1 ? "" : "s"}
             </span>
           </div>
@@ -233,8 +235,8 @@ const SinglePageView = memo(function SinglePageView({
   displayMode: DisplayMode
 }) {
   return (
-    <div className="space-y-4">
-      <p className="technical-caption">
+    <div className="flex flex-col gap-4">
+      <p className="text-xs text-muted-foreground">
         {screenshots.length} viewport{screenshots.length !== 1 ? "s" : ""}
       </p>
       <ScreenshotCollection
@@ -263,9 +265,9 @@ const ScreenshotCollection = memo(function ScreenshotCollection({
       <div className="strip-scroll-row">
         {screenshots.map((s) =>
           showViewportLabel ? (
-            <div key={s.id} className="space-y-2">
+            <div key={s.id} className="flex flex-col gap-2">
               <p className="font-mono text-xs text-muted-foreground">
-                {s.width}x{s.height}
+                {s.width}×{s.height}
               </p>
               <ScreenshotCard
                 screenshot={s}
@@ -287,12 +289,12 @@ const ScreenshotCollection = memo(function ScreenshotCollection({
   }
 
   return (
-    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
       {screenshots.map((s) => (
         <div key={s.id}>
           {showViewportLabel && (
             <p className="mb-2 font-mono text-xs text-muted-foreground">
-              {s.width}x{s.height}
+              {s.width}×{s.height}
             </p>
           )}
           <ScreenshotCard

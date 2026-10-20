@@ -1,23 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useParams, useNavigate } from "react-router-dom"
+import { Link, useParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
+  AlertTriangle,
   Download,
   ChevronLeft,
   ChevronRight,
   RotateCcw,
-  Loader2,
 } from "lucide-react"
 import { screenshotsApi } from "@/api/screenshots"
 import { buildImgUrl } from "@/components/screenshots/screenshot-utils"
 import { ScreenshotViewport } from "@/components/screenshots/ScreenshotViewport"
 import PageHeader from "@/components/layout/PageHeader"
 import { useBreadcrumbs } from "@/hooks/useBreadcrumbs"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { BrowserIcon } from "@/components/ui/BrowserIcon"
 import { Button } from "@/components/ui/button"
+import { Kbd } from "@/components/ui/kbd"
 import { MetadataCard } from "@/components/ui/MetadataCard"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Spinner } from "@/components/ui/spinner"
 import { StateMessage } from "@/components/ui/StateMessage"
+import { StatusBadge } from "@/components/ui/StatusBadge"
 import { formatDate, shortId, extractApiError } from "@/lib/helpers"
 import type { Screenshot } from "@/types"
 
@@ -34,10 +39,6 @@ function getPathnameLabel(url: string): string {
   } catch {
     return url
   }
-}
-
-function formatViewportBrowser(screenshot: Screenshot): string {
-  return `${screenshot.width}x${screenshot.height} / ${browserLabel(screenshot.browser)}`
 }
 
 function findNextIndex(
@@ -148,6 +149,11 @@ export function ScreenshotDetailPage() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      // Leave keys to menus, fields and browser shortcuts that handle them.
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target as HTMLElement | null
+      if (target?.closest("input, textarea, select, [contenteditable='true'], [role='menu']")) return
+
       if (event.key === "ArrowLeft") {
         event.preventDefault()
         navigateToIndex(prevIndex)
@@ -175,12 +181,30 @@ export function ScreenshotDetailPage() {
 
   if (isLoading) {
     return (
-      <StateMessage compact title="Loading screenshot" description="Fetching screenshot details..." />
+      <div className="flex flex-col gap-4">
+        <Skeleton className="h-7 w-96 max-w-full" />
+        <Skeleton className="h-4 w-32" />
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(280px,1fr)]">
+          <Skeleton className="h-[480px]" />
+          <Skeleton className="h-[320px]" />
+        </div>
+      </div>
     )
   }
 
   if (!screenshot) {
-    return <StateMessage compact tone="destructive" title="Screenshot not found" />
+    return (
+      <StateMessage
+        compact
+        tone="destructive"
+        title="Screenshot not found"
+        action={
+          <Button asChild variant="outline">
+            <Link to={`/tasks/${taskId}`}>Back to the task</Link>
+          </Button>
+        }
+      />
+    )
   }
 
   const imgUrl = buildImgUrl(screenshot)
@@ -193,44 +217,36 @@ export function ScreenshotDetailPage() {
     ].join("_") + `.${screenshot.file_format === "jpeg" ? "jpg" : screenshot.file_format}`
 
   return (
-    <div className="page-shell">
+    <div className="flex flex-col gap-6">
       <PageHeader
         title={
           <h1 className="text-xl font-semibold tracking-tight break-all">{screenshot.url}</h1>
         }
         meta={`Capture ${currentIndex + 1} of ${screenshots.length}`}
         actions={
-          <div className="flex items-center gap-2">
+          <>
             <Button
               variant="outline"
-              size="sm"
               onClick={() => recaptureMutation.mutate()}
               disabled={isRecapturing}
-              title={isRecapturing ? "Re-capturing…" : "Re-capture this screenshot"}
             >
-              {isRecapturing ? (
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              ) : (
-                <RotateCcw className="mr-1.5 h-4 w-4" />
-              )}
-              {isRecapturing ? "Recapturing…" : "Redo"}
+              {isRecapturing ? <Spinner data-icon="inline-start" /> : <RotateCcw data-icon="inline-start" />}
+              {isRecapturing ? "Recapturing…" : "Re-capture"}
             </Button>
             {screenshot.status === "ok" && screenshot.signed_url && (
-              <a
-                href={imgUrl}
-                download={downloadFilename}
-                className="inline-flex items-center gap-1.5 border bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-muted"
-              >
-                <Download className="h-4 w-4" />
-                Download
-              </a>
+              <Button asChild variant="outline">
+                <a href={imgUrl} download={downloadFilename}>
+                  <Download data-icon="inline-start" />
+                  Download
+                </a>
+              </Button>
             )}
-          </div>
+          </>
         }
       />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(280px,1fr)]">
-        <div className="space-y-4">
+        <div className="flex flex-col gap-4">
           <ScreenshotViewport
             key={screenshot.id}
             screenshot={screenshot}
@@ -240,130 +256,130 @@ export function ScreenshotDetailPage() {
           />
 
           {screenshots.length > 1 && (
-            <div className="glass-card flex items-center justify-between px-4 py-3">
+            <div className="flex items-center justify-between rounded-xl border bg-card px-3 py-2">
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 onClick={() => navigateToIndex(prevIndex)}
                 disabled={prevIndex === null}
               >
-                <ChevronLeft className="mr-1 h-4 w-4" />
-                Prev
+                <ChevronLeft data-icon="inline-start" />
+                Previous
               </Button>
 
-              <span className="text-sm text-muted-foreground">
+              <span className="text-sm tabular-nums text-muted-foreground">
                 {currentIndex + 1} / {screenshots.length}
               </span>
 
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 onClick={() => navigateToIndex(nextIndex)}
                 disabled={nextIndex === null}
               >
                 Next
-                <ChevronRight className="ml-1 h-4 w-4" />
+                <ChevronRight data-icon="inline-end" />
               </Button>
             </div>
           )}
         </div>
 
-        <aside className="space-y-4">
+        <aside className="flex flex-col gap-4">
           {screenshot.status === "failed" && (
-            <MetadataCard label="Error">
-              <p className="break-words text-sm leading-5 text-destructive">
+            <Alert variant="destructive">
+              <AlertTriangle />
+              <AlertTitle>Capture failed</AlertTitle>
+              <AlertDescription className="break-words">
                 {screenshot.error_message ?? "Screenshot capture failed"}
-              </p>
-            </MetadataCard>
+              </AlertDescription>
+            </Alert>
           )}
 
           {screenshot.status === "ok" &&
             screenshot.captured_with_unstable_dom &&
             screenshot.error_message && (
-              <MetadataCard label="Warning">
-                <p className="break-words text-sm leading-5 text-amber-600 dark:text-amber-400">
+              <Alert className="border-warning/40 text-warning">
+                <AlertTriangle />
+                <AlertTitle>Page was still changing</AlertTitle>
+                <AlertDescription className="break-words text-foreground/80">
                   {screenshot.error_message}
-                </p>
-              </MetadataCard>
+                </AlertDescription>
+              </Alert>
             )}
 
           <MetadataCard label="Navigation">
-            <div className="space-y-2">
+            <div className="flex flex-col gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                className="w-full justify-start"
+                className="w-full justify-between"
                 onClick={() => navigateToIndex(nextIndex)}
                 disabled={nextIndex === null}
               >
-                Next Screenshot
+                Next screenshot
+                <Kbd>→</Kbd>
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                className="w-full justify-start"
+                className="w-full justify-between"
                 onClick={() => navigateToIndex(nextPageIndex)}
                 disabled={nextPageIndex === null}
               >
-                Next Page
+                Next page
+                <Kbd>]</Kbd>
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                className="w-full justify-start"
+                className="w-full justify-between"
                 onClick={() => navigateToIndex(nextViewportBrowserIndex)}
                 disabled={nextViewportBrowserIndex === null}
               >
-                Next Viewport/Browser
+                Next viewport / browser
+                <Kbd>[</Kbd>
               </Button>
               <p className="text-xs text-muted-foreground">
-                Shortcuts: Left Arrow, Right Arrow, ], [
+                Previous screenshot: <Kbd>←</Kbd>
               </p>
             </div>
           </MetadataCard>
 
           <MetadataCard label="Capture">
-            <div className="space-y-2 text-sm">
-              <p>
-                <span className="text-muted-foreground">Page:</span>{" "}
-                <span className="font-mono">{getPathnameLabel(screenshot.url)}</span>
-              </p>
-              <p>
-                <span className="text-muted-foreground">Viewport/Browser:</span>{" "}
-                <span className="font-mono">{formatViewportBrowser(screenshot)}</span>
-              </p>
-              <p>
-                <span className="text-muted-foreground">Status:</span>{" "}
-                <span>
-                  {screenshot.status === "ok"
-                    ? "OK"
-                    : screenshot.status === "recapturing"
-                      ? "Recapturing…"
-                      : "Failed"}
-                </span>
-              </p>
-              <p>
-                <span className="text-muted-foreground">Captured At:</span>{" "}
-                <span>{formatDate(screenshot.created_at)}</span>
-              </p>
-              <p>
-                <span className="text-muted-foreground">Duration:</span>{" "}
-                <span>{screenshot.duration_seconds.toFixed(2)}s</span>
-              </p>
-            </div>
-          </MetadataCard>
-
-          <MetadataCard label="Browser">
-            <div className="flex items-center gap-2 text-sm">
-              <BrowserIcon browser={screenshot.browser} size={14} />
-              {browserLabel(screenshot.browser)}
-            </div>
+            <dl className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 text-sm">
+              <dt className="text-muted-foreground">Page</dt>
+              <dd className="truncate font-mono text-xs" title={getPathnameLabel(screenshot.url)}>
+                {getPathnameLabel(screenshot.url)}
+              </dd>
+              <dt className="text-muted-foreground">Viewport</dt>
+              <dd className="font-mono text-xs">
+                {screenshot.width}×{screenshot.height}
+              </dd>
+              <dt className="text-muted-foreground">Browser</dt>
+              <dd className="flex items-center gap-2">
+                <BrowserIcon browser={screenshot.browser} size={14} />
+                {browserLabel(screenshot.browser)}
+              </dd>
+              <dt className="text-muted-foreground">Status</dt>
+              <dd>
+                <StatusBadge status={screenshot.status} />
+              </dd>
+              <dt className="text-muted-foreground">Captured</dt>
+              <dd>{formatDate(screenshot.created_at)}</dd>
+              <dt className="text-muted-foreground">Duration</dt>
+              <dd className="tabular-nums">{screenshot.duration_seconds.toFixed(2)}s</dd>
+            </dl>
           </MetadataCard>
 
           <MetadataCard label="URL">
-            <p className="break-words font-mono text-xs leading-5" title={screenshot.url}>
+            <a
+              href={screenshot.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="break-all font-mono text-xs leading-5 underline-offset-2 hover:underline"
+            >
               {screenshot.url}
-            </p>
+            </a>
           </MetadataCard>
         </aside>
       </div>

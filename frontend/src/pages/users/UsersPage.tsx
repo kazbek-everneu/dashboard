@@ -12,9 +12,19 @@ import type { User } from "@/types"
 import { extractApiError } from "@/lib/helpers"
 import { formatDate } from "@/lib/formatters"
 import PageHeader from "@/components/layout/PageHeader"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  FieldTitle,
+} from "@/components/ui/field"
+import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { FormField } from "@/components/ui/FormField"
 import { FormDialogFooter } from "@/components/ui/FormDialogFooter"
@@ -30,6 +40,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -48,15 +59,20 @@ type UserFormValues = z.infer<typeof userFormSchema>
 const userColumns: ColumnDef<User>[] = [
   {
     key: "name",
-    header: "Name",
-    width: "w-[240px]",
-    cell: (row) => <span className="font-medium text-foreground">{row.name}</span>,
-  },
-  {
-    key: "email",
-    header: "Email",
-    width: "w-[280px]",
-    cell: (row) => <span className="text-muted-foreground">{row.email}</span>,
+    header: "User",
+    cell: (row) => (
+      <div className="flex items-center gap-3">
+        <Avatar className="size-8 rounded-lg">
+          <AvatarFallback className="rounded-lg text-xs font-semibold">
+            {(row.name || row.email).slice(0, 2).toUpperCase()}
+          </AvatarFallback>
+        </Avatar>
+        <div className="grid min-w-0 leading-tight">
+          <span className="truncate font-medium text-foreground">{row.name}</span>
+          <span className="truncate text-xs text-muted-foreground">{row.email}</span>
+        </div>
+      </div>
+    ),
   },
   {
     key: "role",
@@ -64,8 +80,8 @@ const userColumns: ColumnDef<User>[] = [
     width: "w-[160px]",
     cell: (row) =>
       row.is_admin ? (
-        <Badge className="gap-1.5">
-          <ShieldCheck className="h-3.5 w-3.5" />
+        <Badge>
+          <ShieldCheck data-icon="inline-start" />
           Admin
         </Badge>
       ) : (
@@ -74,8 +90,9 @@ const userColumns: ColumnDef<User>[] = [
   },
   {
     key: "created_at",
-    header: "Created date",
+    header: "Created",
     width: "w-[220px]",
+    hideOnMobile: true,
     cell: (row) => <span className="text-muted-foreground">{formatDate(row.created_at)}</span>,
   },
 ]
@@ -269,13 +286,13 @@ export default function UsersPage() {
   )
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <PageHeader
         title={<h1 className="text-2xl font-semibold tracking-tight">Users</h1>}
         description="View registered users and create new accounts."
         actions={
           <Button onClick={openCreateModal} className="shrink-0">
-            <Plus className="h-4 w-4 mr-2" />
+            <Plus data-icon="inline-start" />
             Add User
           </Button>
         }
@@ -290,12 +307,12 @@ export default function UsersPage() {
           const actions: RowAction<User>[] = [
             {
               label: "Edit User",
-              icon: <Pencil className="h-4 w-4" />,
+              icon: <Pencil />,
               onClick: () => openEditModal(row),
             },
             {
               label: "Copy email",
-              icon: <Copy className="h-4 w-4" />,
+              icon: <Copy />,
               onClick: () => void handleCopyEmail(row.email),
             },
           ]
@@ -303,7 +320,7 @@ export default function UsersPage() {
           if (currentUser?.id !== row.id) {
             actions.push({
               label: "Delete User",
-              icon: <Trash2 className="h-4 w-4" />,
+              icon: <Trash2 />,
               onClick: () => openDeleteModal(row),
               variant: "destructive" as const,
             })
@@ -317,7 +334,7 @@ export default function UsersPage() {
           description: "Create the first account to start using the dashboard.",
           action: (
             <Button onClick={openCreateModal}>
-              <Plus className="h-4 w-4 mr-2" />
+              <Plus data-icon="inline-start" />
               Add User
             </Button>
           ),
@@ -350,7 +367,7 @@ export default function UsersPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
             <FormField label="Name" htmlFor="user-name" error={errors.name?.message}>
               <Input id="user-name" placeholder="Jane Doe" {...register("name")} />
             </FormField>
@@ -378,26 +395,21 @@ export default function UsersPage() {
               <Input id="user-password" type="password" {...register("password")} />
             </FormField>
 
-            <div className="flex items-center justify-between border border-border bg-muted/30 px-3 py-3">
-              <div className="space-y-1">
-                <label
-                  htmlFor="user-is-admin"
-                  className="text-sm font-medium text-foreground"
-                >
-                  Administrator
-                </label>
-                <p className="text-xs text-muted-foreground">
-                  Can create users and manage administrator access.
-                </p>
-              </div>
-              <Switch
-                id="user-is-admin"
-                checked={isAdminValue}
-                onCheckedChange={(checked) =>
-                  setValue("is_admin", checked, { shouldDirty: true })
-                }
-              />
-            </div>
+            <FieldLabel htmlFor="user-is-admin">
+              <Field orientation="horizontal">
+                <FieldContent>
+                  <FieldTitle>Administrator</FieldTitle>
+                  <FieldDescription>Can create users and manage administrator access.</FieldDescription>
+                </FieldContent>
+                <Switch
+                  id="user-is-admin"
+                  checked={isAdminValue}
+                  onCheckedChange={(checked) =>
+                    setValue("is_admin", checked, { shouldDirty: true })
+                  }
+                />
+              </Field>
+            </FieldLabel>
 
             <FormDialogFooter
               onCancel={() => setFormOpen(false)}
@@ -427,7 +439,7 @@ export default function UsersPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="flex flex-col gap-4">
             <FormField
               label="Reassign to"
               htmlFor="user-reassign-target"
@@ -456,13 +468,11 @@ export default function UsersPage() {
                 </SelectContent>
               </Select>
               {!reassignmentUsersQuery.isLoading && reassignmentCandidates.length === 0 ? (
-                <p className="text-sm text-destructive">
-                  There is no active user available for reassignment.
-                </p>
+                <FieldError>There is no active user available for reassignment.</FieldError>
               ) : null}
             </FormField>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <DialogFooter>
               <Button
                 variant="outline"
                 onClick={() => {
@@ -482,9 +492,10 @@ export default function UsersPage() {
                   reassignmentCandidates.length === 0
                 }
               >
-                {deleteUserMutation.isPending ? "Deleting..." : "Delete User"}
+                {deleteUserMutation.isPending && <Spinner data-icon="inline-start" />}
+                {deleteUserMutation.isPending ? "Deleting…" : "Delete User"}
               </Button>
-            </div>
+            </DialogFooter>
           </div>
         </DialogContent>
       </Dialog>

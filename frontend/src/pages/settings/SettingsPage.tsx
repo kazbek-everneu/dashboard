@@ -5,15 +5,31 @@ import type { FieldErrors, UseFormRegister } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { toast } from "sonner"
+import { KeyRound, Save } from "lucide-react"
 import { settingsApi } from "@/api/settings"
 import { extractApiError } from "@/lib/helpers"
 import PageHeader from "@/components/layout/PageHeader"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
 import { FormField } from "@/components/ui/FormField"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { SectionHeading } from "@/components/ui/SectionHeading"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Slider } from "@/components/ui/slider"
+import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import {
   Select,
@@ -59,18 +75,43 @@ function NumberField({
   register: UseFormRegister<FormValues>
   errors: FieldErrors<FormValues>
 }) {
+  const id = `setting-${name}`
   return (
     <FormField
       label={label}
+      htmlFor={id}
       hint={hint}
       error={errors[name]?.message as string | undefined}
     >
       <Input
+        id={id}
         type="number"
         className="max-w-xs"
         {...register(name, { valueAsNumber: true })}
       />
     </FormField>
+  )
+}
+
+function SettingsSection({
+  title,
+  description,
+  children,
+}: {
+  title: string
+  description?: string
+  children: React.ReactNode
+}) {
+  return (
+    <Card>
+      <CardHeader className="border-b">
+        <CardTitle>{title}</CardTitle>
+        {description ? <CardDescription>{description}</CardDescription> : null}
+      </CardHeader>
+      <CardContent>
+        <FieldGroup>{children}</FieldGroup>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -89,7 +130,7 @@ export function SettingsPage() {
     reset,
     setValue,
     watch,
-    formState: { errors },
+    formState: { errors, isDirty },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -131,33 +172,36 @@ export function SettingsPage() {
   })
 
   if (isLoading) {
-    return <div className="text-muted-foreground">Loading settings…</div>
+    return (
+      <div className="flex max-w-3xl flex-col gap-6">
+        <Skeleton className="h-8 w-40" />
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Skeleton key={i} className="h-56 w-full" />
+        ))}
+      </div>
+    )
   }
 
   return (
-    <div className="max-w-3xl">
+    <div className="flex max-w-3xl flex-col gap-6">
       <PageHeader
-        className="mb-6"
         title={<h1 className="text-2xl font-semibold tracking-tight">Settings</h1>}
         description="Global application settings"
       />
 
       <form
         onSubmit={handleSubmit((values) => updateMutation.mutate(values))}
-        className="space-y-6"
+        className="flex flex-col gap-6"
       >
-        {/* ─── Capture ─────────────────────────────────────────────── */}
-        <div className="bg-card border border-border p-6 space-y-5">
-          <SectionHeading title="Capture" />
-
-          <FormField label="Screenshot format">
+        <SettingsSection title="Capture" description="Image format used for new screenshots.">
+          <FormField label="Screenshot format" htmlFor="setting-screenshot_format">
             <Select
               value={screenshotFormat}
               onValueChange={(value: FormValues["screenshot_format"]) =>
-                setValue("screenshot_format", value)
+                setValue("screenshot_format", value, { shouldDirty: true })
               }
             >
-              <SelectTrigger className="w-full max-w-xs">
+              <SelectTrigger id="setting-screenshot_format" className="w-full max-w-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -168,12 +212,13 @@ export function SettingsPage() {
           </FormField>
 
           {screenshotFormat === "jpeg" && (
-            <div className="space-y-2 max-w-xs">
+            <Field className="max-w-xs">
               <div className="flex items-center justify-between">
-                <Label>Screenshot quality</Label>
-                <span className="text-sm font-medium">{quality}</span>
+                <FieldLabel htmlFor="setting-screenshot_quality">Screenshot quality</FieldLabel>
+                <span className="text-sm font-medium tabular-nums">{quality}</span>
               </div>
               <Slider
+                id="setting-screenshot_quality"
                 min={0}
                 max={100}
                 step={1}
@@ -181,17 +226,17 @@ export function SettingsPage() {
                 onValueChange={(values: number[]) => {
                   const next = values[0] ?? quality
                   setQuality(next)
-                  setValue("screenshot_quality", next)
+                  setValue("screenshot_quality", next, { shouldDirty: true })
                 }}
               />
-            </div>
+            </Field>
           )}
-        </div>
+        </SettingsSection>
 
-        {/* ─── Workers & Performance ───────────────────────────────── */}
-        <div className="bg-card border border-border p-6 space-y-5">
-          <SectionHeading title="Workers & Performance" />
-
+        <SettingsSection
+          title="Workers & performance"
+          description="How many pages are captured at once and how long a task may run."
+        >
           <NumberField
             name="sem_limit"
             label="Concurrent captures (SEM_LIMIT)"
@@ -206,23 +251,29 @@ export function SettingsPage() {
             register={register}
             errors={errors}
           />
-          <FormField hint="Captures all viewports of a URL in one browser through a shared context: a warm HTTP cache and fewer repeated downloads, but cookies and localStorage carry over between those viewports. Retries always use a fresh isolated context. Applies to new tasks.">
-            <div className="flex items-center gap-3">
-              <Switch
-                checked={reuseBrowserContext}
-                onCheckedChange={(checked: boolean) =>
-                  setValue("reuse_browser_context", checked)
-                }
-              />
-              <Label>Reuse browser context across viewports</Label>
-            </div>
-          </FormField>
-        </div>
+          <Field orientation="horizontal">
+            <FieldContent>
+              <FieldLabel htmlFor="setting-reuse_browser_context">
+                Reuse browser context across viewports
+              </FieldLabel>
+              <FieldDescription>
+                Captures all viewports of a URL in one browser through a shared context: a warm
+                HTTP cache and fewer repeated downloads, but cookies and localStorage carry over
+                between those viewports. Retries always use a fresh isolated context. Applies to
+                new tasks.
+              </FieldDescription>
+            </FieldContent>
+            <Switch
+              id="setting-reuse_browser_context"
+              checked={reuseBrowserContext}
+              onCheckedChange={(checked: boolean) =>
+                setValue("reuse_browser_context", checked, { shouldDirty: true })
+              }
+            />
+          </Field>
+        </SettingsSection>
 
-        {/* ─── Security & Sessions ─────────────────────────────────── */}
-        <div className="bg-card border border-border p-6 space-y-5">
-          <SectionHeading title="Security & Sessions" />
-
+        <SettingsSection title="Security & sessions" description="Session and password-reset limits.">
           <NumberField
             name="access_token_expire_minutes"
             label="Access token lifetime (minutes)"
@@ -247,36 +298,35 @@ export function SettingsPage() {
             register={register}
             errors={errors}
           />
-        </div>
+        </SettingsSection>
 
-        {/* ─── Email / SMTP ────────────────────────────────────────── */}
-        <div className="bg-card border border-border p-6 space-y-5">
-          <SectionHeading title="Email / SMTP" />
-          <p className="text-xs text-muted-foreground -mt-2">
-            SMTP credentials (username &amp; password) are configured server-side
-            in <code>.env</code> and are not editable here.
-          </p>
+        <SettingsSection title="Email / SMTP" description="Outgoing mail for password-reset links.">
+          <Alert>
+            <KeyRound />
+            <AlertDescription>
+              SMTP credentials (username &amp; password) are configured server-side in{" "}
+              <code className="font-mono">.env</code> and are not editable here.
+            </AlertDescription>
+          </Alert>
 
           <FormField
             label="SMTP host"
+            htmlFor="setting-smtp_host"
             hint="Leave empty to disable password-reset emails."
             error={errors.smtp_host?.message}
           >
             <Input
+              id="setting-smtp_host"
               type="text"
               className="max-w-md"
               placeholder="smtp.example.com"
               {...register("smtp_host")}
             />
           </FormField>
-          <NumberField
-            name="smtp_port"
-            label="SMTP port"
-            register={register}
-            errors={errors}
-          />
-          <FormField label="From email" error={errors.smtp_from_email?.message}>
+          <NumberField name="smtp_port" label="SMTP port" register={register} errors={errors} />
+          <FormField label="From email" htmlFor="setting-smtp_from_email" error={errors.smtp_from_email?.message}>
             <Input
+              id="setting-smtp_from_email"
               type="text"
               className="max-w-md"
               placeholder="no-reply@example.com"
@@ -285,30 +335,45 @@ export function SettingsPage() {
           </FormField>
           <FormField
             label="Frontend base URL"
+            htmlFor="setting-frontend_base_url"
             hint="Used to build password-reset links in emails."
             error={errors.frontend_base_url?.message}
           >
             <Input
+              id="setting-frontend_base_url"
               type="text"
               className="max-w-md"
               placeholder="https://app.example.com"
               {...register("frontend_base_url")}
             />
           </FormField>
-          <div className="flex items-center gap-3">
+          <Field orientation="horizontal">
+            <FieldLabel htmlFor="setting-smtp_use_tls">Use TLS (STARTTLS)</FieldLabel>
             <Switch
+              id="setting-smtp_use_tls"
               checked={smtpUseTls}
               onCheckedChange={(checked: boolean) =>
-                setValue("smtp_use_tls", checked)
+                setValue("smtp_use_tls", checked, { shouldDirty: true })
               }
             />
-            <Label>Use TLS (STARTTLS)</Label>
-          </div>
-        </div>
+          </Field>
+        </SettingsSection>
 
-        <Button type="submit" disabled={updateMutation.isPending}>
-          {updateMutation.isPending ? "Saving…" : "Save settings"}
-        </Button>
+        {/* Sticks to the bottom of the viewport while the form scrolls */}
+        <div className="sticky bottom-4 z-10 flex flex-col gap-3 rounded-xl border bg-card/95 px-4 py-3 shadow-sm backdrop-blur supports-backdrop-filter:bg-card/80 sm:flex-row sm:items-center sm:justify-between">
+          {isDirty ? (
+            <span className="flex items-center gap-2 text-sm font-medium">
+              <span className="size-2 rounded-full bg-warning" />
+              Unsaved changes
+            </span>
+          ) : (
+            <span className="text-sm text-muted-foreground">All settings are saved</span>
+          )}
+          <Button type="submit" disabled={updateMutation.isPending}>
+            {updateMutation.isPending ? <Spinner data-icon="inline-start" /> : <Save data-icon="inline-start" />}
+            {updateMutation.isPending ? "Saving…" : "Save settings"}
+          </Button>
+        </div>
       </form>
     </div>
   )
