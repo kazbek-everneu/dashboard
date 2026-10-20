@@ -63,6 +63,9 @@ _BROWSER_WS_PORTS: dict[str, int] = {
     "firefox": 3003,
     "webkit": 3004,
 }
+# Mirrored by CHROMIUM_ARGS in the sibling's browser-server.mjs (minus
+# --disable-dev-shm-usage), which drops --enable-automation from Playwright's
+# defaults too. AutomationControlled off keeps navigator.webdriver false.
 _CHROMIUM_LAUNCH_ARGS: tuple[str, ...] = (
     "--disable-gpu",
     "--disable-extensions",
@@ -71,7 +74,9 @@ _CHROMIUM_LAUNCH_ARGS: tuple[str, ...] = (
     "--no-sandbox",
     "--no-first-run",
     "--disable-default-apps",
+    "--disable-blink-features=AutomationControlled",
 )
+_CHROMIUM_IGNORED_DEFAULT_ARGS: tuple[str, ...] = ("--enable-automation",)
 _PROGRESS_FLUSH_EVERY = 5
 _JOB_TIMEOUT_GRACE_SECONDS = 1.0
 _TIMEOUT_PLACEHOLDER_ERROR = "Task timed out before this capture completed."
@@ -165,6 +170,7 @@ async def _launch_browser(pw: Any, browser_name: str) -> Any:
     launch_kwargs: dict[str, object] = {"headless": True}
     if use_chromium_launch_args:
         launch_kwargs["args"] = list(_CHROMIUM_LAUNCH_ARGS)
+        launch_kwargs["ignore_default_args"] = list(_CHROMIUM_IGNORED_DEFAULT_ARGS)
     if channel:
         launch_kwargs["channel"] = channel
 
