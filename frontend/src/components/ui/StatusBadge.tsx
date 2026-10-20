@@ -19,7 +19,7 @@ export function StatusBadge({ status }: { status: string }) {
       {status === "running" && (
         <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-status-running-dot" />
       )}
-      {status.replace(/_/g, " ")}
+      {status === "ok" ? "OK" : status.replace(/_/g, " ")}
     </Badge>
   )
 }

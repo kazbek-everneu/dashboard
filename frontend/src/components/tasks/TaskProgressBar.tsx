@@ -44,7 +44,7 @@ export function TaskProgressBar({
           </span>
           {hasMismatch && (
             <span title="Task count mismatch — task may have been created with different settings">
-              <AlertTriangle size={11} className="text-amber-500" />
+              <AlertTriangle size={11} className="text-warning" />
             </span>
           )}
           {failed > 0 && (

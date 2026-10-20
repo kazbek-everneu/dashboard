@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { toast } from "sonner"
+import { ArrowRight, Camera, FolderOpen, Globe } from "lucide-react"
 import { tasksApi } from "@/api/tasks"
 import { projectsApi } from "@/api/projects"
 import { extractApiError } from "@/lib/helpers"
@@ -12,7 +13,24 @@ import { normalizeViewport } from "@/lib/viewportUtils"
 import PageHeader from "@/components/layout/PageHeader"
 import { useBreadcrumbs } from "@/hooks/useBreadcrumbs"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLegend,
+  FieldSeparator,
+  FieldSet,
+} from "@/components/ui/field"
 import { FormField } from "@/components/ui/FormField"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -20,8 +38,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Separator } from "@/components/ui/separator"
-import { SectionHeading } from "@/components/ui/SectionHeading"
+import { Spinner } from "@/components/ui/spinner"
+import { StateMessage } from "@/components/ui/StateMessage"
 import { UrlSelector } from "@/components/sitemap/UrlSelector"
 import { BrowserMultiSelect } from "@/components/settings/BrowserMultiSelect"
 import { ViewportList } from "@/components/settings/ViewportList"
@@ -159,138 +177,138 @@ export default function CreateTaskPage() {
     }
   }, [enabledUrls, selectedProjectId, setValue])
 
+  const contextProjectLabel = contextProjectName ?? queryProjectId
+  const urlCount = selectedUrlIds.length
+  const viewportCount = taskConfig.viewports.length
+
   return (
-    <div className="space-y-6 max-w-6xl">
+    <div className="flex max-w-6xl flex-col gap-6">
       <PageHeader
         title={<h1 className="text-2xl font-semibold tracking-tight">Create New Task</h1>}
         description="Configure and launch a new screenshot task"
       />
 
       <form onSubmit={handleSubmit((v) => createMutation.mutate(v))}>
-        <div className="flex flex-col lg:flex-row gap-6">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
           {/* ── LEFT COLUMN — Configuration ── */}
-          <div className="lg:w-[460px] shrink-0 space-y-5">
-
-            {/* Project selector */}
-            <FormField
-              label="Project"
-              required
-              error={queryProjectId ? undefined : errors.project_id?.message}
-              className="space-y-1.5"
-            >
-              {queryProjectId ? (
-                <div className="border bg-muted/40 px-3 py-2 text-sm">
-                  {projectsQuery.data?.find((p) => p.id === queryProjectId)?.name ?? queryProjectId}
-                </div>
-              ) : (
-                <>
-                  <Select
-                    value={selectedProjectId || undefined}
-                    onValueChange={(v) => {
-                      setValue("project_id", v)
-                      setValue("selectedUrlIds", [])
-                    }}
+          <div className="flex shrink-0 flex-col gap-4 lg:w-[460px]">
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>Configuration</CardTitle>
+                <CardDescription>Browsers and viewports default to the project settings.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <FieldGroup>
+                  <FormField
+                    label="Project"
+                    htmlFor="task-project"
+                    required
+                    error={queryProjectId ? undefined : errors.project_id?.message}
                   >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select a project…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(projectsQuery.data ?? []).map((p) => (
-                        <SelectItem key={p.id} value={p.id}>
-                          {p.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </>
-              )}
-            </FormField>
+                    {queryProjectId ? (
+                      <Input id="task-project" readOnly value={contextProjectLabel} />
+                    ) : (
+                      <Select
+                        value={selectedProjectId || undefined}
+                        onValueChange={(v) => {
+                          setValue("project_id", v)
+                          setValue("selectedUrlIds", [])
+                        }}
+                      >
+                        <SelectTrigger id="task-project" className="w-full">
+                          <SelectValue placeholder="Select a project…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(projectsQuery.data ?? []).map((p) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </FormField>
 
-            {config && (
-              <>
-                <Separator />
+                  {config && (
+                    <>
+                      <FieldSeparator />
+                      <FieldSet>
+                        <FieldLegend variant="label">Browsers</FieldLegend>
+                        <FieldDescription>Browsers to capture with in this task.</FieldDescription>
+                        <BrowserMultiSelect
+                          selected={taskConfig.default_browsers}
+                          defaultBrowsers={config.default_browsers}
+                          onChange={(browsers) =>
+                            setTaskConfig((c) => ({
+                              ...c,
+                              default_browsers: browsers ?? c.default_browsers,
+                            }))
+                          }
+                        />
+                      </FieldSet>
 
-                {/* ── Browsers ── */}
-                <div className="space-y-2">
-                  <SectionHeading title="Browsers" />
-                  <p className="text-xs text-muted-foreground">
-                    Select browsers for this task. Defaults loaded from project settings.
-                  </p>
-                  <BrowserMultiSelect
-                    selected={taskConfig.default_browsers}
-                    defaultBrowsers={config.default_browsers}
-                    onChange={(browsers) =>
-                      setTaskConfig((c) => ({
-                        ...c,
-                        default_browsers: browsers ?? c.default_browsers,
-                      }))
-                    }
-                  />
-                </div>
-
-                <Separator />
-
-                {/* ── Viewports ── */}
-                <div className="space-y-2">
-                  <SectionHeading title="Viewports" />
-                  <p className="text-xs text-muted-foreground">
-                    Configure screen sizes for this task. Defaults loaded from project settings.
-                  </p>
-                  <ViewportList
-                    viewports={taskConfig.viewports}
-                    onChange={(vps) => setTaskConfig((c) => ({ ...c, viewports: vps }))}
-                    defaultBrowsers={taskConfig.default_browsers}
-                  />
-                </div>
-              </>
-            )}
-
-            <Separator />
+                      <FieldSeparator />
+                      <FieldSet>
+                        <FieldLegend variant="label">Viewports</FieldLegend>
+                        <FieldDescription>Screen sizes to capture in this task.</FieldDescription>
+                        <ViewportList
+                          viewports={taskConfig.viewports}
+                          onChange={(vps) => setTaskConfig((c) => ({ ...c, viewports: vps }))}
+                          defaultBrowsers={taskConfig.default_browsers}
+                        />
+                      </FieldSet>
+                    </>
+                  )}
+                </FieldGroup>
+              </CardContent>
+            </Card>
 
             {/* Estimated counter + submit */}
-            <div className="border bg-muted/30 p-4 space-y-3">
-              <p className="text-sm font-medium">Estimated screenshots</p>
-              <p className="text-3xl font-bold text-center">{estimatedCount}</p>
-              {selectedUrlIds.length > 0 && taskConfig.viewports.length > 0 && (
-                <p className="text-xs text-muted-foreground text-center">
-                  {selectedUrlIds.length} URL{selectedUrlIds.length !== 1 ? "s" : ""} ×{" "}
-                  {taskConfig.viewports.length} viewport
-                  {taskConfig.viewports.length !== 1 ? "s" : ""}
-                </p>
-              )}
-              {errors.selectedUrlIds && (
-                <p className="text-sm text-destructive text-center">
-                  {errors.selectedUrlIds.message}
-                </p>
-              )}
-              <Button
-                type="submit"
-                className="w-full"
-                disabled={createMutation.isPending}
-              >
-                {createMutation.isPending ? "Creating…" : "Create Task"}
-              </Button>
-            </div>
+            <Card>
+              <CardHeader>
+                <CardDescription>Estimated screenshots</CardDescription>
+                <CardTitle className="text-3xl font-semibold tabular-nums">{estimatedCount}</CardTitle>
+                {urlCount > 0 && viewportCount > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {urlCount} URL{urlCount !== 1 ? "s" : ""} × {viewportCount} viewport
+                    {viewportCount !== 1 ? "s" : ""}
+                  </p>
+                )}
+              </CardHeader>
+              <CardFooter className="flex-col items-stretch gap-2">
+                {errors.selectedUrlIds && <FieldError>{errors.selectedUrlIds.message}</FieldError>}
+                <Button type="submit" className="w-full" disabled={createMutation.isPending}>
+                  {createMutation.isPending ? <Spinner data-icon="inline-start" /> : <Camera data-icon="inline-start" />}
+                  {createMutation.isPending ? "Creating…" : "Create task"}
+                </Button>
+              </CardFooter>
+            </Card>
           </div>
 
           {/* ── RIGHT COLUMN — URL Selection ── */}
-          <div className="flex-1 min-w-0">
+          <div className="min-w-0 flex-1">
             {!selectedProjectId ? (
-              <div className="border flex min-h-[500px] items-center justify-center px-6 text-center text-sm text-muted-foreground">
-                Select a project to load pages
-              </div>
+              <StateMessage
+                icon={<FolderOpen />}
+                title="Select a project"
+                description="Its sitemap pages will appear here."
+                className="min-h-[500px]"
+              />
             ) : enabledUrls.length === 0 && !sitemapQuery.isLoading ? (
-              <div className="border flex min-h-[500px] flex-col items-center justify-center gap-2 px-6 text-center">
-                <p className="text-sm text-muted-foreground">
-                  No sitemap found. Fetch sitemap in the Sitemap tab first.
-                </p>
-                <Link
-                  to={`/projects/${selectedProjectId}`}
-                  className="text-xs text-primary underline"
-                >
-                  Go to project sitemap →
-                </Link>
-              </div>
+              <StateMessage
+                icon={<Globe />}
+                title="No sitemap pages yet"
+                description="Fetch the sitemap on the project page first."
+                className="min-h-[500px]"
+                action={
+                  <Button asChild variant="outline">
+                    <Link to={`/projects/${selectedProjectId}`}>
+                      Go to project sitemap
+                      <ArrowRight data-icon="inline-end" />
+                    </Link>
+                  </Button>
+                }
+              />
             ) : (
               <UrlSelector
                 urls={enabledUrls}
@@ -298,9 +316,6 @@ export default function CreateTaskPage() {
                 onSelectionChange={handleSelectionChange}
                 isLoading={sitemapQuery.isLoading}
               />
-            )}
-            {errors.selectedUrlIds && (
-              <p className="text-sm text-destructive mt-2">{errors.selectedUrlIds.message}</p>
             )}
           </div>
         </div>

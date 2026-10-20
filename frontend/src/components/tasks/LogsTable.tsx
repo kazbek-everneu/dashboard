@@ -1,8 +1,21 @@
 import { useMemo } from "react"
 import { Download } from "lucide-react"
+import { cn } from "@/lib/utils"
 import { formatDate } from "@/lib/helpers"
+import { browserLabel } from "@/lib/task-formatters"
+import { BrowserIcon } from "@/components/ui/BrowserIcon"
+import { Button } from "@/components/ui/button"
 import { StateMessage } from "@/components/ui/StateMessage"
 import { StatusBadge } from "@/components/ui/StatusBadge"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Screenshot } from "@/types"
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api"
@@ -10,6 +23,8 @@ const API_BASE = import.meta.env.VITE_API_URL ?? "/api"
 function fileExtension(screenshot: Screenshot): string {
   return screenshot.file_format === "jpeg" ? "jpg" : screenshot.file_format
 }
+
+const HEADERS = ["Time", "URL", "Viewport", "Browser", "Status"]
 
 export function LogsTable({ screenshots }: { screenshots: Screenshot[] }) {
   const sorted = useMemo(
@@ -28,61 +43,80 @@ export function LogsTable({ screenshots }: { screenshots: Screenshot[] }) {
   }
 
   return (
-    <div className="glass-card overflow-hidden text-xs">
-      <table className="w-full">
-        <thead className="sticky-table-head border-b surface-divider">
-          <tr>
-            {["Time", "URL", "Viewport", "Browser", "Status", ""].map((h) => (
-              <th key={h} className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+    <div className="overflow-hidden rounded-xl border bg-card">
+      <Table className="text-xs">
+        <TableHeader className="bg-muted/50">
+          <TableRow className="hover:bg-transparent">
+            {HEADERS.map((h) => (
+              <TableHead key={h} className="px-4 text-muted-foreground">
                 {h}
-              </th>
+              </TableHead>
             ))}
-          </tr>
-        </thead>
-        <tbody>
+            <TableHead className="w-12 px-4">
+              <span className="sr-only">Download</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {sorted.map((s) => (
-            <tr
+            <TableRow
               key={s.id}
-              className={`border-b surface-divider last:border-0 ${s.status === "failed" ? "bg-destructive/5" : "hover:bg-muted/60"}`}
+              className={cn(s.status === "failed" && "bg-destructive/5 hover:bg-destructive/10")}
             >
-              <td className="px-4 py-3 text-muted-foreground font-mono whitespace-nowrap">
+              <TableCell className="px-4 py-2.5 font-mono text-muted-foreground">
                 {formatDate(s.created_at)}
-              </td>
-              <td className="px-4 py-3 max-w-xs">
-                <span className="truncate block" title={s.url}>{s.url}</span>
+              </TableCell>
+              <TableCell className="max-w-xs px-4 py-2.5 whitespace-normal">
+                <span className="block truncate" title={s.url}>
+                  {s.url}
+                </span>
                 {s.status === "failed" && s.error_message && (
-                  <span className="text-destructive block mt-0.5">{s.error_message}</span>
+                  <span className="mt-0.5 block text-destructive">{s.error_message}</span>
                 )}
                 {s.status === "ok" && s.captured_with_unstable_dom && s.error_message && (
-                  <span className="text-amber-600 dark:text-amber-400 block mt-0.5">
-                    {s.error_message}
-                  </span>
+                  <span className="mt-0.5 block text-warning">{s.error_message}</span>
                 )}
-              </td>
-              <td className="px-4 py-3 font-mono whitespace-nowrap">{s.width}x{s.height}</td>
-              <td className="px-4 py-3">{s.browser}</td>
-              <td className="px-4 py-3"><StatusBadge status={s.status} /></td>
-              <td className="px-4 py-3">
+              </TableCell>
+              <TableCell className="px-4 py-2.5 font-mono">
+                {s.width}×{s.height}
+              </TableCell>
+              <TableCell className="px-4 py-2.5">
+                <span className="inline-flex items-center gap-1.5">
+                  <BrowserIcon browser={s.browser} size={14} />
+                  {browserLabel(s.browser)}
+                </span>
+              </TableCell>
+              <TableCell className="px-4 py-2.5">
+                <StatusBadge status={s.status} />
+              </TableCell>
+              <TableCell className="px-4 py-2.5 text-right">
                 {s.status === "ok" && s.signed_url && (
-                  <a
-                    href={`${API_BASE}${s.signed_url}`}
-                    download={[
-                      s.url?.split("/").filter(Boolean).pop() || "screenshot",
-                      `${s.width}x${s.height}`,
-                      s.browser,
-                    ].join("_") + `.${fileExtension(s)}`}
-                    onClick={(e) => e.stopPropagation()}
-                    className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                    title="Download screenshot"
-                  >
-                    <Download size={14} />
-                  </a>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button asChild variant="ghost" size="icon-xs" className="text-muted-foreground">
+                        <a
+                          href={`${API_BASE}${s.signed_url}`}
+                          download={
+                            [
+                              s.url?.split("/").filter(Boolean).pop() || "screenshot",
+                              `${s.width}x${s.height}`,
+                              s.browser,
+                            ].join("_") + `.${fileExtension(s)}`
+                          }
+                          aria-label="Download screenshot"
+                        >
+                          <Download />
+                        </a>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Download screenshot</TooltipContent>
+                  </Tooltip>
                 )}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   )
 }

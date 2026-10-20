@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
-import { useParams, useNavigate } from "react-router-dom"
+import { Link, useParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Square, Trash2, Download, Archive, Loader2 } from "lucide-react"
+import { Square, Trash2, Download, Archive } from "lucide-react"
 import { toast } from "sonner"
 import { useTaskPolling } from "@/hooks/useTaskPolling"
 import { tasksApi } from "@/api/tasks"
@@ -17,11 +17,15 @@ import { BrowserIcon } from "@/components/ui/BrowserIcon"
 import { TaskProgressBar } from "@/components/tasks/TaskProgressBar"
 import { TaskStatsBar } from "@/components/tasks/TaskStatsBar"
 import { LogsTable } from "@/components/tasks/LogsTable"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Spinner } from "@/components/ui/spinner"
 import { StateMessage } from "@/components/ui/StateMessage"
-import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { StatusBadge } from "@/components/ui/StatusBadge"
 import ScreenshotsPage from "@/pages/screenshots/ScreenshotsPage"
 import type { ViewportConfig } from "@/types"
@@ -173,8 +177,31 @@ export default function TaskDetailPage() {
     { label: task ? `Task #${shortId(task.id)}` : "Task" },
   ])
 
-  if (isLoading) return <StateMessage compact title="Loading task" description="Preparing task details..." />
-  if (!task) return <StateMessage compact tone="destructive" title="Task not found" />
+  if (isLoading) {
+    return (
+      <div className="flex flex-col gap-4">
+        <Skeleton className="h-8 w-56" />
+        <Skeleton className="h-4 w-72" />
+        <Skeleton className="h-9 w-64" />
+        <Skeleton className="h-80 w-full" />
+      </div>
+    )
+  }
+  if (!task) {
+    return (
+      <StateMessage
+        compact
+        tone="destructive"
+        title="Task not found"
+        description="It may have been deleted."
+        action={
+          <Button asChild variant="outline">
+            <Link to="/tasks">Back to tasks</Link>
+          </Button>
+        }
+      />
+    )
+  }
 
   const okCount = task.progress_done
   const failedCount = task.progress_failed
@@ -192,7 +219,7 @@ export default function TaskDetailPage() {
 
   const statsItems = [
     { label: "Shots", value: task.progress_total.toLocaleString() },
-    { label: "Done", value: okCount.toLocaleString(), valueClassName: "text-sm font-semibold text-emerald-600 dark:text-emerald-400" },
+    { label: "Done", value: okCount.toLocaleString(), valueClassName: "text-sm font-semibold text-success" },
     { label: "Errors", value: failedCount.toLocaleString(), valueClassName: failedCount > 0 ? "text-sm font-semibold text-destructive" : "text-sm font-semibold text-foreground" },
     { label: "Duration", value: formatElapsedTime(elapsedMs) },
     { label: "Speed", value: formatThroughput(processedCount, elapsedMs) },
@@ -217,7 +244,7 @@ export default function TaskDetailPage() {
   ]
 
   return (
-    <div className="page-shell">
+    <div className="flex flex-col gap-6">
       <PageHeader
         title={
           <div className="flex items-center gap-2">
@@ -236,112 +263,114 @@ export default function TaskDetailPage() {
           <TaskStatsBar items={statsItems} />
         ) : null}
         actions={
-          <div className="flex items-center gap-2 shrink-0">
+          <>
             {ACTIVE_STATUSES.has(task.status) && (
               <Button
-                variant="outline"
-                size="sm"
+                variant="destructive"
                 onClick={() => cancelMutation.mutate()}
                 disabled={cancelMutation.isPending}
-                className="text-destructive border-destructive/40 hover:bg-destructive/10"
               >
-                <Square className="h-3.5 w-3.5 mr-1.5" />
-                {cancelMutation.isPending ? "Stopping..." : "Stop"}
+                {cancelMutation.isPending ? <Spinner data-icon="inline-start" /> : <Square data-icon="inline-start" />}
+                {cancelMutation.isPending ? "Stopping…" : "Stop"}
               </Button>
             )}
 
             {DELETABLE_STATUSES.has(task.status) && (
               archiveState === "ready" && archiveUrl ? (
-                <Button variant="outline" size="sm" asChild>
-                  <a
-                    href={`${API_BASE}${archiveUrl}`}
-                    download={`task-${id}.zip`}
-                  >
-                    <Download className="h-3.5 w-3.5 mr-1.5" />
+                <Button variant="outline" asChild>
+                  <a href={`${API_BASE}${archiveUrl}`} download={`task-${id}.zip`}>
+                    <Download data-icon="inline-start" />
                     Download ZIP
-                    <span className="ml-1.5 text-xs text-muted-foreground">
-                      {formatFileSize(archiveSize)}
-                    </span>
+                    <span className="text-xs text-muted-foreground">{formatFileSize(archiveSize)}</span>
                   </a>
                 </Button>
               ) : archiveState === "loading" ? (
-                <Button variant="outline" size="sm" disabled>
-                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                  Creating...
+                <Button variant="outline" disabled>
+                  <Spinner data-icon="inline-start" />
+                  Creating archive…
                 </Button>
+              ) : task.status !== "completed" ? (
+                // A disabled button gets no pointer events; the span carries the tooltip.
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={0} className="inline-flex">
+                      <Button variant="outline" disabled>
+                        <Archive data-icon="inline-start" />
+                        Archive
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>Only completed tasks can be archived</TooltipContent>
+                </Tooltip>
               ) : (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void handleGenerateArchive()}
-                  disabled={task.status !== "completed"}
-                  title={task.status !== "completed" ? "Task must be completed to create archive" : undefined}
-                >
-                  <Archive className="h-3.5 w-3.5 mr-1.5" />
+                <Button variant="outline" onClick={() => void handleGenerateArchive()}>
+                  <Archive data-icon="inline-start" />
                   Archive
                 </Button>
               )
             )}
 
             {DELETABLE_STATUSES.has(task.status) && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConfirmDelete(true)}
-                className="text-destructive hover:bg-destructive/10"
-              >
-                <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+              <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
+                <Trash2 data-icon="inline-start" />
                 Delete
               </Button>
             )}
-          </div>
+          </>
         }
       />
 
       <div
         className={cn(
           "overflow-hidden transition-[opacity,max-height,margin] duration-200 ease-out",
-          showProgressCard ? "max-h-40 opacity-100" : "max-h-0 opacity-0 pointer-events-none",
-          isProgressExiting && "opacity-0 max-h-0",
+          // -mt-6 cancels the parent gap while the card is collapsed.
+          showProgressCard ? "max-h-40 opacity-100" : "pointer-events-none -mt-6 max-h-0 opacity-0",
+          isProgressExiting && "-mt-6 max-h-0 opacity-0",
         )}
         style={{ transitionDuration: `${PROGRESS_EXIT_MS}ms` }}
       >
-        <div className="glass-card p-5 space-y-3">
-          <div className="flex items-center justify-between text-sm">
-            <span className="font-medium">Screenshots</span>
-            <StatusBadge status={task.status} />
-          </div>
-          <TaskProgressBar
-            status={task.status}
-            done={task.progress_done}
-            total={task.progress_total}
-            failed={task.progress_failed}
-          />
-          <p className="text-xs text-muted-foreground">Auto-refreshing every 3 seconds...</p>
-        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>Capturing screenshots</CardTitle>
+            <CardDescription>Auto-refreshing every 3 seconds…</CardDescription>
+            <CardAction>
+              <StatusBadge status={task.status} />
+            </CardAction>
+          </CardHeader>
+          <CardContent>
+            <TaskProgressBar
+              status={task.status}
+              done={task.progress_done}
+              total={task.progress_total}
+              failed={task.progress_failed}
+            />
+          </CardContent>
+        </Card>
       </div>
 
-      <Separator />
-
-      <Tabs defaultValue="screenshots">
+      <Tabs defaultValue="screenshots" className="gap-4">
         <TabsList>
           <TabsTrigger value="screenshots">
             Screenshots
             {task.progress_total > 0 && (
-              <span className="ml-1.5 text-xs text-muted-foreground">({task.progress_total})</span>
+              <Badge variant="secondary" className="tabular-nums">
+                {task.progress_total}
+              </Badge>
             )}
           </TabsTrigger>
           <TabsTrigger value="logs">
             Logs
             {failedCount > 0 && (
-              <span className="ml-1.5 text-xs text-destructive font-medium">{failedCount} errors</span>
+              <Badge variant="destructive" className="tabular-nums">
+                {failedCount} {failedCount === 1 ? "error" : "errors"}
+              </Badge>
             )}
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="screenshots" className="mt-4">
+        <TabsContent value="screenshots">
           <ScreenshotsPage taskId={task.id} screenshots={screenshots} />
         </TabsContent>
-        <TabsContent value="logs" className="mt-4">
+        <TabsContent value="logs">
           <LogsTable screenshots={screenshots} />
         </TabsContent>
       </Tabs>

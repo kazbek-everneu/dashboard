@@ -1,13 +1,13 @@
 import { useState, useMemo } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
-import { useQuery } from "@tanstack/react-query"
-import { Plus, ListTodo, CheckCircle, XCircle, Loader2, TimerOff } from "lucide-react"
+import { keepPreviousData, useQuery } from "@tanstack/react-query"
+import { Plus, ListTodo, CheckCircle, XCircle, Loader2, Search, TimerOff } from "lucide-react"
 import { tasksApi } from "@/api/tasks"
 import { projectsApi } from "@/api/projects"
 import type { Task, Project } from "@/types"
 import PageHeader from "@/components/layout/PageHeader"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
 import { StatsCard } from "@/components/ui/StatsCard"
 import { FilterToolbar } from "@/components/ui/FilterToolbar"
 import { DataTable, type ColumnDef } from "@/components/ui/DataTable"
@@ -64,14 +64,17 @@ export default function AllTasksPage() {
 
   const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: projectsApi.list })
   const statsQuery = useQuery({ queryKey: ["tasks", "stats"], queryFn: tasksApi.stats })
+  // Status and search filter the loaded page client-side, so they are not part
+  // of the key (no refetch per keystroke); keep rows visible while paging.
   const tasksQuery = useQuery({
-    queryKey: ["tasks", "all", projectFilter, statusFilter, search, page],
+    queryKey: ["tasks", "all", projectFilter, page],
     queryFn: () =>
       tasksApi.list({
         limit: PAGE_SIZE,
         skip: (page - 1) * PAGE_SIZE,
         projectId: projectFilter || undefined,
       }),
+    placeholderData: keepPreviousData,
   })
 
   const projectMap = useMemo(() => {
@@ -146,14 +149,14 @@ export default function AllTasksPage() {
         meta={`${tasksQuery.data?.total ?? 0} indexed task${(tasksQuery.data?.total ?? 0) === 1 ? "" : "s"}`}
         actions={
           <Button onClick={() => navigate("/tasks/new")}>
-            <Plus className="h-4 w-4 mr-2" />
+            <Plus data-icon="inline-start" />
             New Task
           </Button>
         }
       />
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatsCard icon={ListTodo} value={statsQuery.data?.total ?? 0} label="Total Tasks" />
         <StatsCard icon={Loader2} value={running} label="Running" pulse={running > 0} />
         <StatsCard icon={CheckCircle} value={completed} label="Completed" />
@@ -171,7 +174,7 @@ export default function AllTasksPage() {
                 setPage(1)
               }}
             >
-              <SelectTrigger className="w-full sm:w-48">
+              <SelectTrigger className="w-full sm:w-48" aria-label="Filter by project">
                 <SelectValue placeholder="All projects" />
               </SelectTrigger>
               <SelectContent>
@@ -191,7 +194,7 @@ export default function AllTasksPage() {
                 setPage(1)
               }}
             >
-              <SelectTrigger className="w-full sm:w-40">
+              <SelectTrigger className="w-full sm:w-40" aria-label="Filter by status">
                 <SelectValue placeholder="All statuses" />
               </SelectTrigger>
               <SelectContent>
@@ -205,15 +208,20 @@ export default function AllTasksPage() {
               </SelectContent>
             </Select>
 
-            <Input
-              placeholder="Search by project or task ID…"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value)
-                setPage(1)
-              }}
-              className="w-full sm:w-72"
-            />
+            <InputGroup className="w-full sm:w-72">
+              <InputGroupAddon>
+                <Search />
+              </InputGroupAddon>
+              <InputGroupInput
+                placeholder="Search by project or task ID…"
+                aria-label="Search tasks"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value)
+                  setPage(1)
+                }}
+              />
+            </InputGroup>
           </>
         }
         actions={
@@ -261,7 +269,7 @@ export default function AllTasksPage() {
                 description: "Create your first task to start screenshotting.",
                 action: (
                   <Button onClick={() => navigate("/tasks/new")}>
-                    <Plus className="h-4 w-4 mr-2" />
+                    <Plus data-icon="inline-start" />
                     New Task
                   </Button>
                 ),
