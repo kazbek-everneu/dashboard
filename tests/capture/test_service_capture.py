@@ -336,8 +336,8 @@ async def test_capture_screenshot_builds_the_profile_from_device_type(
     explicit, by_width = (call.kwargs["profile"] for call in capture.await_args_list)
     assert explicit.device_type == "tablet"
     assert by_width.device_type == "mobile"
-    # No emulation yet: every device captures like a desktop.
-    assert explicit.context_options() == by_width.context_options() == {}
+    # Built with the browser's version, so the device user agent is set too.
+    assert explicit.emulation == by_width.emulation == "full"
 
 
 def test_importing_the_capture_package_disables_fonts_ready_wait(

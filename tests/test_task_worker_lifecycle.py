@@ -614,6 +614,7 @@ async def test_worker_marks_task_timed_out_and_records_missing_screenshots() -> 
             {
                 "headless": True,
                 "args": list(_CHROMIUM_LAUNCH_ARGS),
+                "ignore_default_args": ["--enable-automation"],
                 "channel": "chrome",
             },
         ),
@@ -623,6 +624,7 @@ async def test_worker_marks_task_timed_out_and_records_missing_screenshots() -> 
             {
                 "headless": True,
                 "args": list(_CHROMIUM_LAUNCH_ARGS),
+                "ignore_default_args": ["--enable-automation"],
                 "channel": "chrome",
             },
         ),
@@ -632,6 +634,7 @@ async def test_worker_marks_task_timed_out_and_records_missing_screenshots() -> 
             {
                 "headless": True,
                 "args": list(_CHROMIUM_LAUNCH_ARGS),
+                "ignore_default_args": ["--enable-automation"],
                 "channel": "msedge",
             },
         ),
@@ -696,9 +699,12 @@ async def test_launch_browser_launches_locally_when_endpoint_empty() -> None:
         {
             "headless": True,
             "args": list(_CHROMIUM_LAUNCH_ARGS),
+            "ignore_default_args": ["--enable-automation"],
             "channel": "chrome",
         }
     ]
+    # Same automation-hiding switch as the browser server's CHROMIUM_ARGS.
+    assert "--disable-blink-features=AutomationControlled" in _CHROMIUM_LAUNCH_ARGS
 
 
 @pytest.mark.parametrize(
