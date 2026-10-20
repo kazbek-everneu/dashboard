@@ -49,9 +49,6 @@ MAX_RETRY_SETTLE_TIMEOUT_MS = 37500
 # Caps of the self-bounded page waits within a readiness window.
 FONTS_WAIT_CAP_MS = 5000
 DECODE_WAIT_CAP_MS = 12000
-# Fixed pauses right before the screenshot (stable / unstable capture).
-FINAL_SETTLE_MS = 500
-UNSTABLE_SETTLE_MS = 300
 # Extra time the outer asyncio safety net allows on top of a timeout the page
 # script already enforces itself.
 JS_TIMEOUT_GRACE_MS = 2000
