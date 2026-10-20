@@ -14,13 +14,10 @@ export interface LoginRequest {
   password: string
 }
 
-export interface RegisterRequest {
+export interface CreateUserRequest {
   name: string
   email: string
   password: string
-}
-
-export interface CreateUserRequest extends RegisterRequest {
   is_admin?: boolean
 }
 

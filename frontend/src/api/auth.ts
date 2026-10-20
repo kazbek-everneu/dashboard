@@ -3,7 +3,6 @@ import type {
   PasswordResetConfirmRequest,
   PasswordResetRequest,
   PasswordResetResponse,
-  RegisterRequest,
   TokenResponse,
   User,
 } from "@/types"
@@ -17,11 +16,6 @@ export const authApi = {
     const { data } = await apiClient.post<TokenResponse>("/auth/login", form, {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
     })
-    return data
-  },
-
-  register: async (payload: RegisterRequest): Promise<User> => {
-    const { data } = await apiClient.post<User>("/auth/register", payload)
     return data
   },
 

@@ -42,10 +42,6 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-async def _count_users(session: AsyncSession) -> int:
-    return int((await session.exec(select(func.count()).select_from(User))).one())
-
-
 def create_access_token(user_id: uuid.UUID, expire_minutes: int | None = None) -> str:
     minutes = (
         expire_minutes
@@ -289,30 +285,29 @@ async def confirm_password_reset(
     await session.commit()
 
 
-async def register_user(
+async def create_user_account(
     session: AsyncSession,
     data: UserCreate,
     *,
-    is_admin: bool | None = None,
+    is_admin: bool,
 ) -> User:
+    """Create a user. Only admins (``POST /users``) and the CLI call this —
+    there is no public self-registration."""
     existing = await session.exec(select(User).where(User.email == data.email))
     if existing.first():
         raise ConflictError("Email already registered")
 
-    user_is_admin = (
-        is_admin if is_admin is not None else await _count_users(session) == 0
-    )
     user = User(
         name=data.name.strip(),
         email=data.email,
         hashed_password=hash_password(data.password),
-        is_admin=user_is_admin,
+        is_admin=is_admin,
         password_changed_at=_utcnow(),
     )
     session.add(user)
     await session.commit()
     await session.refresh(user)
-    logger.info("Registered new user id=%s is_admin=%s", str(user.id), user.is_admin)
+    logger.info("Created user id=%s is_admin=%s", str(user.id), user.is_admin)
     return user
 
 

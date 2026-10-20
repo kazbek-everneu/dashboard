@@ -12,7 +12,7 @@ from app.auth.models import (
     UserRead,
     UserUpdate,
 )
-from app.auth.service import hash_password, register_user
+from app.auth.service import create_user_account, hash_password
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.projects.models import Project
 from app.tasks.models import Task
@@ -56,7 +56,7 @@ async def list_users(
 
 
 async def create_user(session: AsyncSession, data: UserAdminCreate) -> UserRead:
-    user = await register_user(session, data, is_admin=data.is_admin)
+    user = await create_user_account(session, data, is_admin=data.is_admin)
     return user_to_read(user)
 
 

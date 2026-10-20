@@ -22,6 +22,14 @@ docker compose -f compose.yml -f compose.prod.yml run --rm migrate
 docker compose -f compose.yml -f compose.prod.yml up -d --build
 ```
 
+There is no public sign-up: admins create accounts under **Users**. On an empty
+database create the first admin with the CLI (it prompts for the password):
+
+```bash
+docker compose -f compose.yml -f compose.dev.yml exec api \
+  python -m app.cli create-admin --email you@example.com --name "Your Name"
+```
+
 ## Environment Variables
 
 | Variable | Description |
@@ -121,7 +129,7 @@ Chrome/Edge).
 
 | Endpoint | Description |
 |---|---|
-| `POST /auth/register` `POST /auth/login` | Auth |
+| `POST /auth/login` `POST /auth/logout` `GET /auth/me` | Auth |
 | `GET/POST /projects/` | Projects |
 | `GET/PATCH /projects/{id}/config` | Capture settings (viewports, browsers) |
 | `POST /projects/{id}/sitemap/fetch` | Parse sitemap from project URL |
@@ -130,5 +138,5 @@ Chrome/Edge).
 | `POST /tasks/{id}/archive` | Create ZIP of task screenshots |
 | `GET /screenshots/{task_id}` | List screenshots |
 | `GET /files/{task_id}/{filename}` | Serve screenshot (HMAC token required) |
-| `GET/PATCH /settings/` | App settings |
+| `GET/PATCH /settings/` | App settings (admin only) |
 | `GET /health` | Health check |

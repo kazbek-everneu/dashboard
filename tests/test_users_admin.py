@@ -1,13 +1,16 @@
 from datetime import datetime, timedelta
 
 import pytest
+from fastapi import APIRouter
 from fastapi.routing import APIRoute
 
 from app.auth.dependencies import get_current_admin_user
 from app.auth.models import User, UserAdminCreate, UserCreate, UserRead, UserUpdate
-from app.auth.service import register_user
+from app.auth.router import router as auth_router
+from app.auth.service import create_user_account
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.projects.models import Project
+from app.settings.router import router as settings_router
 from app.tasks.models import Task
 from app.users.router import router as users_router
 from app.users.service import create_user, delete_user, update_user, user_to_read
@@ -121,8 +124,8 @@ def _task(project: Project, creator: User) -> Task:
     return Task(project_id=project.id, created_by=creator.id)
 
 
-def _route(path: str, method: str) -> APIRoute:
-    for route in users_router.routes:
+def _route(path: str, method: str, router: APIRouter = users_router) -> APIRoute:
+    for route in router.routes:
         if (
             isinstance(route, APIRoute)
             and route.path == path
@@ -144,36 +147,33 @@ def test_list_and_create_user_routes_require_admin_dependency() -> None:
         )
 
 
+def test_settings_routes_require_admin_dependency() -> None:
+    for route in [
+        _route("/", "GET", settings_router),
+        _route("/", "PATCH", settings_router),
+    ]:
+        assert any(
+            dependency.call is get_current_admin_user
+            for dependency in route.dependant.dependencies
+        )
+
+
+def test_public_registration_route_is_gone() -> None:
+    assert not any(
+        isinstance(route, APIRoute) and route.path == "/register"
+        for route in auth_router.routes
+    )
+
+
 @pytest.mark.asyncio
-async def test_first_registered_user_is_admin_and_later_users_are_regular() -> None:
+async def test_first_user_is_not_promoted_to_admin_implicitly() -> None:
     session = _FakeUserSession()
 
-    first = await register_user(
+    user = await create_user_account(
         session,
         UserCreate(name="First", email="first@example.com", password="password123"),
+        is_admin=False,
     )
-    second = await register_user(
-        session,
-        UserCreate(name="Second", email="second@example.com", password="password123"),
-    )
-
-    assert first.is_admin is True
-    assert second.is_admin is False
-
-
-@pytest.mark.asyncio
-async def test_public_registration_does_not_allow_admin_self_assignment() -> None:
-    session = _FakeUserSession([_user("admin@example.com", is_admin=True)])
-    payload = UserCreate.model_validate(
-        {
-            "name": "User",
-            "email": "user@example.com",
-            "password": "password123",
-            "is_admin": True,
-        }
-    )
-
-    user = await register_user(session, payload)
 
     assert user.is_admin is False
 

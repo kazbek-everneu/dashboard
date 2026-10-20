@@ -9,7 +9,6 @@ import { useAuth } from "@/hooks/useAuth"
 import AppLayout from "@/components/layout/AppLayout"
 import ForgotPasswordPage from "@/pages/auth/ForgotPasswordPage"
 import LoginPage from "@/pages/auth/LoginPage"
-import RegisterPage from "@/pages/auth/RegisterPage"
 import ResetPasswordPage from "@/pages/auth/ResetPasswordPage"
 import ProjectsPage from "@/pages/projects/ProjectsPage"
 import ProjectDetailPage from "@/pages/projects/ProjectDetailPage"
@@ -116,14 +115,6 @@ export default function App() {
                 }
               />
               <Route
-                path="/register"
-                element={
-                  <PublicRoute>
-                    <RegisterPage />
-                  </PublicRoute>
-                }
-              />
-              <Route
                 path="/forgot-password"
                 element={
                   <PublicRoute>
@@ -160,7 +151,14 @@ export default function App() {
                     </AdminRoute>
                   }
                 />
-                <Route path="/settings" element={<SettingsPage />} />
+                <Route
+                  path="/settings"
+                  element={
+                    <AdminRoute>
+                      <SettingsPage />
+                    </AdminRoute>
+                  }
+                />
                 <Route
                   path="/tasks/:taskId/screenshots/:screenshotId"
                   element={<ScreenshotDetailPage />}

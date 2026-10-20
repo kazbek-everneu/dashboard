@@ -59,14 +59,7 @@ export default function LoginPage() {
     <AuthCardLayout
       title="QA Screenshot Tool"
       description="Sign in to your account"
-      footer={
-        <>
-          Don&apos;t have an account?{" "}
-          <Link to="/register" className="font-medium text-foreground underline underline-offset-4">
-            Register
-          </Link>
-        </>
-      }
+      footer="Accounts are created by an administrator."
     >
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
         <FormField label="Email" htmlFor="email" error={errors.email?.message}>

@@ -14,7 +14,7 @@ apiClient.interceptors.response.use(
     if (error.response?.status === 401) {
       // Don't redirect on public auth pages.
       const currentPath = window.location.pathname
-      const isPublicAuthPage = ["/login", "/register", "/forgot-password", "/reset-password"].some(
+      const isPublicAuthPage = ["/login", "/forgot-password", "/reset-password"].some(
         (path) => currentPath.includes(path),
       )
       if (!isPublicAuthPage) {

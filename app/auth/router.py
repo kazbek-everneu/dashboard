@@ -15,7 +15,6 @@ from app.auth.models import (
     PasswordResetResponse,
     TokenResponse,
     User,
-    UserCreate,
     UserRead,
 )
 from app.auth.service import (
@@ -23,7 +22,6 @@ from app.auth.service import (
     confirm_password_reset,
     create_access_token,
     decode_access_token_payload,
-    register_user,
     request_password_reset,
     revoke_token,
 )
@@ -35,14 +33,6 @@ from app.settings.service import get_effective_settings
 router = APIRouter()
 
 _bearer = HTTPBearer(auto_error=False)
-
-
-@router.post("/register", response_model=UserRead, status_code=201)
-async def register(
-    data: UserCreate,
-    session: AsyncSession = Depends(get_session),
-) -> User:
-    return await register_user(session, data)
 
 
 @router.post("/login", response_model=TokenResponse)

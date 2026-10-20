@@ -30,7 +30,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     label: "Administration",
     items: [
       { to: "/users", label: "Users", icon: Users, adminOnly: true },
-      { to: "/settings", label: "Global Settings", icon: Settings },
+      { to: "/settings", label: "Global Settings", icon: Settings, adminOnly: true },
     ],
   },
 ]
