@@ -15,31 +15,47 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 ARCHIVES_DIRNAME = "archives"
+# The per-URL directory name: at most this long, the hash suffix included.
+_URL_DIR_MAX_LENGTH = 100
+_URL_HASH_LENGTH = 8
 
 
 def _sanitise_url_path(url: str) -> str:
     """Convert a page URL into a filesystem-safe single directory name.
 
-    The query string and fragment are discarded.  Path separators are replaced
-    with underscores so the entire URL path maps to one flat directory name,
-    keeping the on-disk layout simple.
+    Path separators are replaced with underscores so the entire URL path maps
+    to one flat directory name, keeping the on-disk layout simple. The fragment
+    is discarded. A URL with a query string, or whose name had to be cut to
+    100 characters, ends in ``-{sha1(url)[:8]}`` instead, so ``/list?page=1``
+    and ``/list?page=2`` (or two long paths with the same start) do not share
+    a directory. Simple paths keep their plain name, so existing rows and
+    files keep matching.
 
     Examples:
         https://example.com/           -> "root"
         https://example.com/products   -> "products"
         https://example.com/a/b/c      -> "a_b_c"
-        https://example.com/foo?bar=1  -> "foo"
+        https://example.com/foo?bar=1  -> "foo-<8 hex>"
+        https://example.com/?page=2    -> "root-<8 hex>"
         https://example.com/who-we-help -> "who-we-help"
     """
-    path = urlparse(url).path.strip("/")
-    if not path:
-        return "root"
+    parsed = urlparse(url)
+    path = parsed.path.strip("/")
     # Flatten path separators, then replace every unsafe char with "_"
     safe = re.sub(r"[^a-zA-Z0-9._-]", "_", path.replace("/", "_"))
     # Collapse runs of underscores that may result from the substitutions
     safe = re.sub(r"_+", "_", safe).strip("_")
-    # Guard against edge-cases that produce an empty string
-    return safe[:100] or "root"
+    # "." / ".." would name the parent directory, never a page.
+    lossy = bool(safe) and not safe.strip(".")
+    if lossy:
+        safe = ""
+    truncated = len(safe) > _URL_DIR_MAX_LENGTH
+    if not (parsed.query or truncated or lossy):
+        return safe or "root"
+    digest = hashlib.sha1(url.encode(), usedforsecurity=False).hexdigest()
+    digest = digest[:_URL_HASH_LENGTH]
+    keep = _URL_DIR_MAX_LENGTH - _URL_HASH_LENGTH - 1
+    return f"{safe[:keep].rstrip('_') or 'root'}-{digest}"
 
 
 def build_file_path(

@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -50,9 +50,24 @@ class ArchiveResponse(BaseModel):
 
 
 def _url_to_folder(url: str) -> str:
-    """Convert a page URL to a ZIP folder name (flat, no nesting)."""
+    """Fallback ZIP folder for a row whose stored file_path has no URL segment."""
     path = urlparse(url).path.strip("/")
     return path.replace("/", "_") or "homepage"
+
+
+def _archive_name(task_id: str, screenshot: Screenshot) -> str:
+    """The screenshot's path inside the task ZIP: ``{task_id}/{url_dir}/{file}``.
+
+    Folder and file name are the stored ``file_path`` segments
+    (``{project}/{task}/{url_dir}/{w}x{h}_{browser}.{ext}``), so the archive
+    mirrors the disk layout and is as collision-free as the storage paths.
+    """
+    parts = PurePosixPath(screenshot.file_path).parts
+    if len(parts) == 4 and not {".", ".."} & set(parts[2:]):
+        return f"{task_id}/{parts[2]}/{parts[3]}"
+    ext = "jpg" if screenshot.file_format == "jpeg" else screenshot.file_format
+    filename = f"{screenshot.width}x{screenshot.height}_{screenshot.browser}.{ext}"
+    return f"{task_id}/{_url_to_folder(screenshot.url)}/{filename}"
 
 
 def _create_archive_sync(
@@ -63,18 +78,20 @@ def _create_archive_sync(
     """Build a ZIP archive from *screenshots* and write it to *archives_dir*.
 
     Runs synchronously — call via run_in_executor to avoid blocking the event loop.
-    Missing files are silently skipped.
+    Missing files are silently skipped, and so is a second row pointing at a
+    file already in the archive.
     """
     archive_path = archives_dir / f"{task_id}.zip"
+    written: set[str] = set()
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for s in screenshots:
             abs_path = abs_file_path(s.file_path)
             if not abs_path.exists():
                 continue
-            folder = _url_to_folder(s.url)
-            ext = "jpg" if s.file_format == "jpeg" else s.file_format
-            filename = f"{s.width}x{s.height}_{s.browser}.{ext}"
-            arcname = f"{task_id}/{folder}/{filename}"
+            arcname = _archive_name(task_id, s)
+            if arcname in written:
+                continue
+            written.add(arcname)
             zf.write(abs_path, arcname)
     return archive_path
 
