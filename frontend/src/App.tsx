@@ -1,5 +1,5 @@
 import { useEffect } from "react"
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
+import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom"
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query"
 import { Toaster } from "@/components/ui/sonner"
 import { authApi } from "@/api/auth"
@@ -11,7 +11,6 @@ import RegisterPage from "@/pages/auth/RegisterPage"
 import ResetPasswordPage from "@/pages/auth/ResetPasswordPage"
 import ProjectsPage from "@/pages/projects/ProjectsPage"
 import ProjectDetailPage from "@/pages/projects/ProjectDetailPage"
-import TasksPage from "@/pages/tasks/TasksPage"
 import TaskDetailPage from "@/pages/tasks/TaskDetailPage"
 import AllTasksPage from "@/pages/tasks/AllTasksPage"
 import CreateTaskPage from "@/pages/tasks/CreateTaskPage"
@@ -24,6 +23,12 @@ const queryClient = new QueryClient({
     queries: { retry: 1, staleTime: 30_000 },
   },
 })
+
+// The old per-project task list is served by AllTasksPage's project filter.
+function LegacyProjectTasksRedirect() {
+  const { id } = useParams<{ id: string }>()
+  return <Navigate to={`/tasks?project_id=${id}`} replace />
+}
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, initialized } = useAuth()
@@ -132,7 +137,7 @@ export default function App() {
             >
               <Route path="/projects" element={<ProjectsPage />} />
               <Route path="/projects/:id" element={<ProjectDetailPage />} />
-              <Route path="/projects/:id/tasks" element={<TasksPage />} />
+              <Route path="/projects/:id/tasks" element={<LegacyProjectTasksRedirect />} />
               <Route path="/tasks" element={<AllTasksPage />} />
               <Route path="/tasks/new" element={<CreateTaskPage />} />
               <Route path="/tasks/:id" element={<TaskDetailPage />} />

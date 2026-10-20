@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { projectsApi } from "@/api/projects"
 import { toast } from "sonner"
-import { extractApiError } from "@/lib/utils"
+import { extractApiError } from "@/lib/helpers"
 
 export function useSitemap(projectId: string) {
   const queryClient = useQueryClient()

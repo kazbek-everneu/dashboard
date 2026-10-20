@@ -1,6 +1,6 @@
 import { useMemo } from "react"
 import { useSearchParams } from "react-router-dom"
-import { getDeviceType } from "@/lib/utils"
+import { getDeviceType } from "@/lib/helpers"
 import type { Screenshot } from "@/types"
 
 export interface PageItem {

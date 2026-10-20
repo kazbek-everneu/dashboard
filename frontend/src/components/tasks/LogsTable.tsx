@@ -1,6 +1,6 @@
 import { useMemo } from "react"
 import { Download } from "lucide-react"
-import { formatDate } from "@/lib/utils"
+import { formatDate } from "@/lib/helpers"
 import { StateMessage } from "@/components/ui/StateMessage"
 import { StatusBadge } from "@/components/ui/StatusBadge"
 import type { Screenshot } from "@/types"

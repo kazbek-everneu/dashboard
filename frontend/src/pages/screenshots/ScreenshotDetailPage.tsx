@@ -18,7 +18,7 @@ import { BrowserIcon } from "@/components/ui/BrowserIcon"
 import { Button } from "@/components/ui/button"
 import { MetadataCard } from "@/components/ui/MetadataCard"
 import { StateMessage } from "@/components/ui/StateMessage"
-import { formatDate, shortId, extractApiError } from "@/lib/utils"
+import { formatDate, shortId, extractApiError } from "@/lib/helpers"
 import type { Screenshot } from "@/types"
 
 function browserLabel(browser: string): string {

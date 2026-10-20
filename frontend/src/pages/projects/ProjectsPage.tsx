@@ -8,7 +8,7 @@ import { Plus, FolderOpen, Camera, ListTodo, Pencil, Trash2, Loader2 } from "luc
 import { toast } from "sonner"
 import { projectsApi } from "@/api/projects"
 import { tasksApi } from "@/api/tasks"
-import { extractApiError } from "@/lib/utils"
+import { extractApiError } from "@/lib/helpers"
 import { formatRelativeTime, formatDate } from "@/lib/formatters"
 import PageHeader from "@/components/layout/PageHeader"
 import { Button } from "@/components/ui/button"

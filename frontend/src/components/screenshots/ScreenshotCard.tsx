@@ -12,11 +12,11 @@ import {
 } from "lucide-react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { cn, extractApiError } from "@/lib/utils"
+import { cn } from "@/lib/utils"
+import { extractApiError, getDeviceType } from "@/lib/helpers"
 import { BrowserIcon } from "@/components/ui/BrowserIcon"
 import { screenshotsApi } from "@/api/screenshots"
 import { buildImgUrl, getRenderedStripDimensions } from "./screenshot-utils"
-import { getDeviceType } from "@/lib/utils"
 import type { Screenshot } from "@/types"
 
 const deviceIcons = {
