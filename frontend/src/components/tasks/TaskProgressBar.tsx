@@ -1,6 +1,6 @@
 import { AlertTriangle } from "lucide-react"
+import { Progress as ProgressPrimitive } from "radix-ui"
 
-import { Progress } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
 import type { TaskStatus } from "@/types"
 
@@ -54,20 +54,24 @@ export function TaskProgressBar({
         <span className="font-medium tabular-nums">{progress}%</span>
       </div>
 
-      <Progress
+      <ProgressPrimitive.Root
         value={progress}
         max={100}
         aria-label={`Task progress: ${done} of ${total} completed`}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={progress}
         aria-valuetext={`${progress}% complete`}
         className={cn(
-          "task-progress-track bg-[var(--task-progress-track)]",
-          compact ? "h-1.5" : "h-2.5",
+          "relative w-full overflow-hidden rounded-full bg-task-progress-track",
+          compact ? "h-1.5" : "h-2",
         )}
-        indicatorClassName={getFillClassName(status, progress)}
-      />
+      >
+        <ProgressPrimitive.Indicator
+          className={cn(
+            "size-full rounded-full transition-transform duration-500",
+            getFillClassName(status, progress),
+          )}
+          style={{ transform: `translateX(-${100 - progress}%)` }}
+        />
+      </ProgressPrimitive.Root>
     </div>
   )
 }

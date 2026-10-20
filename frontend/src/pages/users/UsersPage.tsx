@@ -340,7 +340,7 @@ export default function UsersPage() {
           }
         }}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{isEditMode ? "Edit User" : "Create User"}</DialogTitle>
             <DialogDescription>
@@ -438,7 +438,7 @@ export default function UsersPage() {
                 onValueChange={setReassignToUserId}
                 disabled={reassignmentUsersQuery.isLoading || deleteUserMutation.isPending}
               >
-                <SelectTrigger id="user-reassign-target">
+                <SelectTrigger id="user-reassign-target" className="w-full">
                   <SelectValue
                     placeholder={
                       reassignmentUsersQuery.isLoading

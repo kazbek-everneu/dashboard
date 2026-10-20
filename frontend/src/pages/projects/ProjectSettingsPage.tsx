@@ -76,7 +76,7 @@ export default function ProjectSettingsPage({
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField label="Wait until">
               <Select value={waitUntil} onValueChange={onWaitUntilChange}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

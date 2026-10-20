@@ -2,6 +2,7 @@ import { useEffect } from "react"
 import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom"
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query"
 import { Toaster } from "@/components/ui/sonner"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import { authApi } from "@/api/auth"
 import { useAuth } from "@/hooks/useAuth"
 import AppLayout from "@/components/layout/AppLayout"
@@ -93,72 +94,74 @@ function AuthBootstrap({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthBootstrap>
-        <BrowserRouter>
-          <Routes>
-            <Route
-              path="/login"
-              element={
-                <PublicRoute>
-                  <LoginPage />
-                </PublicRoute>
-              }
-            />
-            <Route
-              path="/register"
-              element={
-                <PublicRoute>
-                  <RegisterPage />
-                </PublicRoute>
-              }
-            />
-            <Route
-              path="/forgot-password"
-              element={
-                <PublicRoute>
-                  <ForgotPasswordPage />
-                </PublicRoute>
-              }
-            />
-            <Route
-              path="/reset-password"
-              element={
-                <PublicRoute>
-                  <ResetPasswordPage />
-                </PublicRoute>
-              }
-            />
-            <Route
-              element={
-                <ProtectedRoute>
-                  <AppLayout />
-                </ProtectedRoute>
-              }
-            >
-              <Route path="/projects" element={<ProjectsPage />} />
-              <Route path="/projects/:id" element={<ProjectDetailPage />} />
-              <Route path="/projects/:id/tasks" element={<LegacyProjectTasksRedirect />} />
-              <Route path="/tasks" element={<AllTasksPage />} />
-              <Route path="/tasks/new" element={<CreateTaskPage />} />
-              <Route path="/tasks/:id" element={<TaskDetailPage />} />
+      <TooltipProvider>
+        <AuthBootstrap>
+          <BrowserRouter>
+            <Routes>
               <Route
-                path="/users"
+                path="/login"
                 element={
-                  <AdminRoute>
-                    <UsersPage />
-                  </AdminRoute>
+                  <PublicRoute>
+                    <LoginPage />
+                  </PublicRoute>
                 }
               />
-              <Route path="/settings" element={<SettingsPage />} />
               <Route
-                path="/tasks/:taskId/screenshots/:screenshotId"
-                element={<ScreenshotDetailPage />}
+                path="/register"
+                element={
+                  <PublicRoute>
+                    <RegisterPage />
+                  </PublicRoute>
+                }
               />
-            </Route>
-            <Route path="*" element={<Navigate to="/projects" replace />} />
-          </Routes>
-        </BrowserRouter>
-      </AuthBootstrap>
+              <Route
+                path="/forgot-password"
+                element={
+                  <PublicRoute>
+                    <ForgotPasswordPage />
+                  </PublicRoute>
+                }
+              />
+              <Route
+                path="/reset-password"
+                element={
+                  <PublicRoute>
+                    <ResetPasswordPage />
+                  </PublicRoute>
+                }
+              />
+              <Route
+                element={
+                  <ProtectedRoute>
+                    <AppLayout />
+                  </ProtectedRoute>
+                }
+              >
+                <Route path="/projects" element={<ProjectsPage />} />
+                <Route path="/projects/:id" element={<ProjectDetailPage />} />
+                <Route path="/projects/:id/tasks" element={<LegacyProjectTasksRedirect />} />
+                <Route path="/tasks" element={<AllTasksPage />} />
+                <Route path="/tasks/new" element={<CreateTaskPage />} />
+                <Route path="/tasks/:id" element={<TaskDetailPage />} />
+                <Route
+                  path="/users"
+                  element={
+                    <AdminRoute>
+                      <UsersPage />
+                    </AdminRoute>
+                  }
+                />
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route
+                  path="/tasks/:taskId/screenshots/:screenshotId"
+                  element={<ScreenshotDetailPage />}
+                />
+              </Route>
+              <Route path="*" element={<Navigate to="/projects" replace />} />
+            </Routes>
+          </BrowserRouter>
+        </AuthBootstrap>
+      </TooltipProvider>
       <Toaster richColors position="top-right" />
     </QueryClientProvider>
   )

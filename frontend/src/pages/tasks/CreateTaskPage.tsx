@@ -194,7 +194,7 @@ export default function CreateTaskPage() {
                       setValue("selectedUrlIds", [])
                     }}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger className="w-full">
                       <SelectValue placeholder="Select a project…" />
                     </SelectTrigger>
                     <SelectContent>

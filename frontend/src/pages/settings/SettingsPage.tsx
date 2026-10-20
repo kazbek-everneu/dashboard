@@ -158,7 +158,7 @@ export function SettingsPage() {
                 setValue("screenshot_format", value)
               }
             >
-              <SelectTrigger className="max-w-xs">
+              <SelectTrigger className="w-full max-w-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

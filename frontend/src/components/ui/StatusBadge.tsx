@@ -1,23 +1,25 @@
 import { Badge } from "@/components/ui/badge"
+import { cn } from "@/lib/utils"
+
+const STATUS_CLASSES: Record<string, string> = {
+  pending: "bg-status-pending-bg text-status-pending-fg",
+  running: "bg-status-running-bg text-status-running-fg",
+  completed: "bg-status-completed-bg text-status-completed-fg",
+  failed: "bg-status-failed-bg text-status-failed-fg",
+  cancelled: "bg-status-cancelled-bg text-status-cancelled-fg",
+  timed_out: "bg-status-timed-out-bg text-status-timed-out-fg",
+}
 
 export function StatusBadge({ status }: { status: string }) {
-  const label = status.replace(/_/g, " ")
+  // Screenshot rows report "ok" where tasks report "completed".
+  const key = status === "ok" ? "completed" : status
 
   return (
-    <Badge
-      className="border-0 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.08em]"
-      style={{
-        background: `var(--status-${status === "ok" ? "completed" : status}-bg, var(--status-cancelled-bg))`,
-        color: `var(--status-${status === "ok" ? "completed" : status}-fg, var(--status-cancelled-fg))`,
-      }}
-    >
+    <Badge className={cn("capitalize", STATUS_CLASSES[key] ?? STATUS_CLASSES.cancelled)}>
       {status === "running" && (
-        <span
-          className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse shrink-0"
-          style={{ background: "var(--status-running-dot)" }}
-        />
+        <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-status-running-dot" />
       )}
-      {label}
+      {status.replace(/_/g, " ")}
     </Badge>
   )
 }
