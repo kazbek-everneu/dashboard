@@ -871,7 +871,7 @@ def _describe(record: ResourceRecord) -> str:
         parts.append(record.failure)
     if record.refused:
         parts.append("refused by the browser")
-    if not record.finished and not record.failure:
+    elif not record.finished and not record.failure:
         parts.append("not finished")
     return ", ".join(parts) or "no details"
 

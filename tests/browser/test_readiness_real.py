@@ -1,15 +1,13 @@
 """readiness.finalize / retry_in_place against the real engines: hanging fonts,
 broken images and stylesheets, the activity tracker and its fast path.
 
-The CaptureRun is built the way pipeline.run_attempt builds it (capture
-context with the init script, NetworkDiagnostics + InflightTracker attached
-before navigation). The network records come from RecordingNet, a stand-in
-fed by the page's own events, so these tests do not depend on how the network
-stage records them.
+The CaptureRun is built the way pipeline.run_attempt builds it: capture
+context with the init script, the production NetworkDiagnostics (whose
+resource registry classifies the issues) and InflightTracker attached before
+navigation.
 """
 
 import contextlib
-import re
 import struct
 import time
 import zlib
@@ -17,85 +15,12 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from playwright.async_api import Browser, ConsoleMessage, Page, Request
-from playwright.async_api import Response as PlaywrightResponse
+from playwright.async_api import Browser
 
 from app.screenshots.capture import network, profiles, readiness
 from app.screenshots.capture.report import CaptureReport
-from app.screenshots.capture.types import CaptureRun, Deadline, ResourceRecord
+from app.screenshots.capture.types import CaptureRun, Deadline
 from tests.browser.helpers import ENGINES, LocalSite, Response, make_config
-
-_URL_RE = re.compile(r"https?://[^\s'\"“”]+")
-_REFUSED_MARKERS = (
-    "Refused to apply style",  # Chromium
-    "was not loaded because its MIME type",  # Firefox
-    "Did not parse stylesheet",  # WebKit
-)
-
-
-class RecordingNet(network.NetworkDiagnostics):
-    """Per URL what the page's events said about its latest request."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.records: dict[str, ResourceRecord] = {}
-        self.by_request: dict[Request, ResourceRecord] = {}
-        self.refused: list[str] = []
-
-    def attach(self, page: Page) -> None:
-        super().attach(page)
-        page.on("request", self._on_request)
-        page.on("response", self._on_response)
-        page.on("requestfinished", self._on_finished)
-        page.on("requestfailed", self._on_failed)
-        page.on("console", self._on_console)
-
-    def _on_request(self, request: Request) -> None:
-        record = ResourceRecord(request.url, request.resource_type)
-        self.records[request.url] = record
-        self.by_request[request] = record
-
-    def _on_response(self, response: PlaywrightResponse) -> None:
-        record = self.by_request.get(response.request)
-        if record is not None:
-            record.status = response.status
-            record.content_type = response.headers.get("content-type")
-
-    def _on_finished(self, request: Request) -> None:
-        record = self.by_request.get(request)
-        if record is not None:
-            record.finished = True
-
-    def _on_failed(self, request: Request) -> None:
-        record = self.by_request.get(request)
-        if record is not None:
-            record.failure = request.failure or "failed"
-
-    def _on_console(self, message: ConsoleMessage) -> None:
-        text = message.text
-        if not any(marker in text for marker in _REFUSED_MARKERS):
-            return
-        match = _URL_RE.search(text)
-        if match is None:
-            return
-        url = match.group(0)
-        self.refused.append(url)
-        if url in self.records:
-            self.records[url].refused = True
-
-    def lookup(self, url: str) -> ResourceRecord | None:
-        return self.records.get(url)
-
-    def problem_resources(self, *, kinds=("stylesheet", "image", "font")):
-        return [
-            record
-            for record in self.records.values()
-            if record.resource_type in kinds
-            and (record.failure or (record.status or 0) >= 400 or record.blocked_like())
-        ]
-
-    def refused_stylesheets(self) -> list[str]:
-        return list(dict.fromkeys(self.refused))
 
 
 @contextlib.asynccontextmanager
@@ -116,7 +41,7 @@ async def opened(
     context = await profiles.open_capture_context(browser, viewport, profile)
     try:
         page = await context.new_page()
-        net = RecordingNet()
+        net = network.NetworkDiagnostics()
         net.attach(page)
         tracker = network.InflightTracker()
         tracker.attach(page)

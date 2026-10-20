@@ -16,7 +16,10 @@ from app.screenshots.capture.types import AssetIssue, NavigationResult, Resource
 from tests.capture.fakes import (
     EMPTY_ASSET_STATE,
     READY_STABILITY_STATE,
+    FakeConsoleMessage,
     FakePage,
+    FakeRequest,
+    FakeResponse,
     make_run,
     results_sequence,
 )
@@ -653,6 +656,66 @@ def test_classify_asset_without_a_url_does_not_look_up() -> None:
     issue = readiness.classify_asset(NoLookup(), "img", "", pending=True)
 
     assert issue == AssetIssue("img", "", "pending", None, "still loading")
+
+
+async def test_finalize_classifies_through_the_network_registry() -> None:
+    """The production NetworkDiagnostics fed by page events, end to end."""
+    page = FakePage(
+        script_results={
+            "decode-images": {
+                **EMPTY_ASSET_STATE,
+                "visibleImageCount": 3,
+                "missingVisibleImageCount": 3,
+                "missingSamples": [
+                    {"kind": "img", "url": GONE + "#frag", "pending": False},
+                    {"kind": "img", "url": BLOCKED, "pending": False},
+                    {"kind": "img", "url": RESET, "pending": False},
+                ],
+            }
+        }
+    )
+    run = make_run(page=page, attach=False)
+    run.net.attach(page)
+    responses = [
+        FakeResponse(status=404, url=GONE, resource_type="image"),
+        FakeResponse(
+            status=403,
+            url=BLOCKED,
+            resource_type="image",
+            headers={"Content-Type": "text/html"},
+        ),
+        FakeResponse(
+            status=200,
+            url=STYLE,
+            resource_type="stylesheet",
+            headers={"Content-Type": "text/html; charset=utf-8"},
+        ),
+    ]
+    for response in responses:
+        page.emit("response", response)
+        page.emit("requestfinished", response.request)
+    page.emit(
+        "requestfailed",
+        FakeRequest(url=RESET, resource_type="image", failure="net::ERR_TIMED_OUT"),
+    )
+    refused = "https://cdn.example.com/theme.css"
+    page.emit(
+        "console",
+        FakeConsoleMessage(
+            f"Did not parse stylesheet at '{refused}' because non CSS MIME types "
+            "are not allowed in strict mode."
+        ),
+    )
+
+    result = await readiness.finalize(run, window_ms=8000)
+
+    assert [(i.kind, i.url, i.category, i.status) for i in result.issues] == [
+        ("img", GONE + "#frag", "missing", 404),
+        ("img", BLOCKED, "blocked", 403),
+        ("img", RESET, "network", None),
+        ("stylesheet", STYLE, "blocked", 200),
+        ("stylesheet", refused, "blocked", None),
+    ]
 
 
 # ---------------------------------------------------------------------------
