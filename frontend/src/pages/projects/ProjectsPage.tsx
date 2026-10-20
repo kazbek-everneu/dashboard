@@ -228,7 +228,7 @@ export default function ProjectsPage() {
   const totalScreenshots = summaries.reduce((sum, s) => sum + s.screenshots_count, 0)
 
   return (
-    <div className="page-shell">
+    <div className="flex flex-col gap-6">
       <PageHeader
         title={<h1 className="text-2xl font-semibold tracking-tight">Projects</h1>}
         description="Manage and monitor your web projects"

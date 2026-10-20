@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react"
+import { useState, useCallback } from "react"
 import { ChevronDown, Monitor, Plus, Smartphone, Tablet } from "lucide-react"
 import {
   DndContext,
@@ -61,6 +61,17 @@ function detectDeviceType(width: number): DeviceType {
 
 const DEVICE_ICONS = { desktop: Monitor, tablet: Tablet, mobile: Smartphone }
 
+// Source of stable dnd-kit row ids (unique across all lists on the page).
+let nextRowId = 0
+const newRowId = () => `vp-${nextRowId++}`
+
+/** Grow or trim the id list to match the number of viewports. */
+function syncRowIds(ids: string[], length: number): string[] {
+  const next = ids.slice(0, length)
+  while (next.length < length) next.push(newRowId())
+  return next
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function ViewportList({ viewports, onChange, defaultBrowsers }: ViewportListProps) {
@@ -68,19 +79,13 @@ export function ViewportList({ viewports, onChange, defaultBrowsers }: ViewportL
   const [newIdx, setNewIdx] = useState<number | null>(null)
   const [showDraft, setShowDraft] = useState(false)
 
-  // Stable ids for dnd-kit — one per viewport position, generated once and
-  // kept in sync with the viewports array length via a ref.
-  const idCounterRef = useRef(0)
-  const rowIdsRef = useRef<string[]>([])
-
-  // Grow the id array when viewports are added
-  while (rowIdsRef.current.length < viewports.length) {
-    rowIdsRef.current.push(`vp-${idCounterRef.current++}`)
+  // Stable ids for dnd-kit — one per viewport position. Drag and remove
+  // update them alongside the viewports; other length changes (adding a
+  // viewport, a new config from the parent) are synced during render.
+  const [rowIds, setRowIds] = useState<string[]>(() => syncRowIds([], viewports.length))
+  if (rowIds.length !== viewports.length) {
+    setRowIds(syncRowIds(rowIds, viewports.length))
   }
-  // Trim if viewports were removed
-  rowIdsRef.current = rowIdsRef.current.slice(0, viewports.length)
-
-  const rowIds = rowIdsRef.current
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -96,7 +101,7 @@ export function ViewportList({ viewports, onChange, defaultBrowsers }: ViewportL
     if (oldIndex === -1 || newIndex === -1) return
 
     // Reorder both the ids array and the viewports array together
-    rowIdsRef.current = arrayMove(rowIds, oldIndex, newIndex)
+    setRowIds(arrayMove(rowIds, oldIndex, newIndex))
     onChange(arrayMove(viewports, oldIndex, newIndex))
   }
 
@@ -133,7 +138,7 @@ export function ViewportList({ viewports, onChange, defaultBrowsers }: ViewportL
 
   function handleRemove(index: number) {
     onChange(viewports.filter((_, i) => i !== index))
-    rowIdsRef.current = rowIdsRef.current.filter((_, i) => i !== index)
+    setRowIds((ids) => ids.filter((_, i) => i !== index))
     if (newIdx !== null && newIdx >= index) setNewIdx(Math.max(0, newIdx - 1))
     if (flashIdx !== null && flashIdx >= index) setFlashIdx(Math.max(0, flashIdx - 1))
   }

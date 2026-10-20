@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Square, Trash2, Download, Archive } from "lucide-react"
@@ -48,10 +48,18 @@ export default function TaskDetailPage() {
   const [archiveUrl, setArchiveUrl] = useState<string | null>(null)
   const [archiveSize, setArchiveSize] = useState<number>(0)
   const [showProgressCard, setShowProgressCard] = useState(false)
-  const [isProgressExiting, setIsProgressExiting] = useState(false)
+  const [wasRunning, setWasRunning] = useState(false)
 
   const { data: task, isLoading } = useTaskPolling(id!)
   const isRunning = task?.status === "running"
+
+  // Show the live progress card once the task runs (state adjusted during
+  // render); when it stops, the card animates out before it is removed.
+  if (isRunning !== wasRunning) {
+    setWasRunning(isRunning)
+    if (isRunning) setShowProgressCard(true)
+  }
+  const isProgressExiting = showProgressCard && !isRunning
 
   const { data: screenshots = [] } = useQuery({
     queryKey: ["screenshots", id],
@@ -109,32 +117,36 @@ export default function TaskDetailPage() {
   }
 
   useEffect(() => {
-    if (!task) return
-
-    if (task.status === "running") {
-      setShowProgressCard(true)
-      setIsProgressExiting(false)
-      return
-    }
-
-    if (!showProgressCard) return
-
-    setIsProgressExiting(true)
-    const timeoutId = window.setTimeout(() => {
-      setShowProgressCard(false)
-      setIsProgressExiting(false)
-    }, PROGRESS_EXIT_MS)
-
+    if (!isProgressExiting) return
+    const timeoutId = window.setTimeout(() => setShowProgressCard(false), PROGRESS_EXIT_MS)
     return () => window.clearTimeout(timeoutId)
-  }, [task?.status, showProgressCard])
+  }, [isProgressExiting])
 
+  // The screenshot list only polls while the task runs, so captures written at
+  // the very end were missed; fetch the final list once the task finishes.
+  const taskStatus = task?.status
+  const prevStatusRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const prevStatus = prevStatusRef.current
+    prevStatusRef.current = taskStatus
+    if (prevStatus && !FINAL_STATUSES.has(prevStatus) && taskStatus && FINAL_STATUSES.has(taskStatus)) {
+      void queryClient.invalidateQueries({ queryKey: ["screenshots", id] })
+    }
+  }, [taskStatus, id, queryClient])
+
+  // "Now" for tasks without a completion time, fixed when the page opens
+  // (the metrics strip that uses it only shows for finished tasks).
+  const [openedAt] = useState(() => Date.now())
+
+  const startedAtIso = task?.started_at
+  const completedAtIso = task?.completed_at
   const elapsedMs = useMemo(() => {
-    if (!task?.started_at) return null
-    const startedAt = new Date(task.started_at).getTime()
-    const endAt = task.completed_at ? new Date(task.completed_at).getTime() : Date.now()
+    if (!startedAtIso) return null
+    const startedAt = new Date(startedAtIso).getTime()
+    const endAt = completedAtIso ? new Date(completedAtIso).getTime() : openedAt
     const diff = endAt - startedAt
     return diff > 0 ? diff : null
-  }, [task?.started_at, task?.completed_at])
+  }, [startedAtIso, completedAtIso, openedAt])
 
   const participatingBrowsers = useMemo(() => {
     if (!task) return []

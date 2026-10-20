@@ -142,7 +142,7 @@ export default function AllTasksPage() {
   const pageRows = rows
 
   return (
-    <div className="page-shell">
+    <div className="flex flex-col gap-6">
       <PageHeader
         title={<h1 className="text-2xl font-semibold tracking-tight">Tasks</h1>}
         description="View and manage screenshot tasks across all projects"

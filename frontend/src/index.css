@@ -79,11 +79,6 @@
   --task-progress-timed-out-a: #D97706;
   --task-progress-timed-out-b: #FBBF24;
 
-  /* Legacy aliases — removed together with the last legacy classes */
-  --surface-1: var(--card);
-  --surface-2: var(--muted);
-  --surface-3: var(--muted);
-  --text-secondary: var(--muted-foreground);
 }
 
 .dark {
@@ -416,58 +411,5 @@
 
   .screenshot-progressive-image.is-loaded {
     opacity: 1;
-  }
-}
-
-/* ─── Legacy surfaces — replaced by shadcn components page by page ────────── */
-
-@layer components {
-  .glass-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
-  }
-
-  .glass-elevated {
-    background: var(--popover);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow:
-      0 4px 6px -1px rgb(0 0 0 / 0.1),
-      0 2px 4px -2px rgb(0 0 0 / 0.1);
-  }
-
-  .hover-lift {
-    transition:
-      box-shadow 180ms ease,
-      border-color 180ms ease,
-      background-color 180ms ease;
-  }
-
-  .hover-lift:hover {
-    border-color: var(--ring);
-  }
-
-  .surface-divider {
-    border-color: var(--border);
-  }
-
-  .sticky-table-head {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    background: var(--muted);
-  }
-
-  .technical-caption {
-    font-size: 0.75rem;
-    line-height: 1rem;
-    color: var(--muted-foreground);
-  }
-
-  .page-shell {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
   }
 }

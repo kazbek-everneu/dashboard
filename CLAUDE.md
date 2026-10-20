@@ -200,9 +200,22 @@ branded channels add ~1–1.5 GB to the image.
 
 Under [frontend/src/](frontend/src/):
 
-- **Layout:** `api/` (one module per domain), `components/ui` (Radix-based
-  primitives) + feature components, `hooks/`, `lib/`, `pages/`, `store/` (Zustand:
-  `auth`, `theme`), `types/index.ts` (mirrors the backend schemas).
+- **Layout:** `api/` (one module per domain), `components/ui` (shadcn primitives +
+  shared app blocks) + feature components, `hooks/`, `lib/`, `pages/`, `store/`
+  (Zustand: `auth`, `theme`, `layout`, `breadcrumbs`), `types/index.ts` (mirrors the
+  backend schemas).
+- **UI kit: shadcn/ui, style `radix-nova`** (Radix primitives via the `radix-ui`
+  package, neutral oklch tokens in `src/index.css`). Add components with
+  `npx shadcn@latest add <name>` from `frontend/` on the host — never inside the
+  container. Install files as-is; adapt them through app wrappers (`FormField` on
+  `Field`, `ConfirmDialog` on `AlertDialog`, `StateMessage` on `Empty`, `DataTable`
+  on `Table`, `StatusBadge` on `Badge`) instead of editing the primitives.
+  `lib/utils.ts` only re-exports `cn` (the CLI owns it); app helpers live in
+  `lib/helpers.ts`. Status colors are tokens (`bg-status-*-bg`, `text-success`,
+  `text-warning`) — no raw palette classes.
+- **Shell:** `components/layout/AppLayout.tsx` = shadcn `SidebarProvider` + `AppSidebar`
+  + sticky `SiteHeader` (breadcrumb, theme menu). Pages name themselves in the
+  breadcrumb with `useBreadcrumbs([...])`; the page scrolls with the window.
 - **`@/` alias** resolves to `src/`.
 - **One axios instance** — [api/client.ts](frontend/src/api/client.ts): `withCredentials`,
   `baseURL = VITE_API_URL ?? "/api"`, and a global response interceptor that on `401`
