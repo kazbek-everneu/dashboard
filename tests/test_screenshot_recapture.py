@@ -426,6 +426,7 @@ async def test_worker_recapture_timeout_marks_failed() -> None:
 
     assert screenshot.status == "failed"
     assert "timed out" in (screenshot.error_message or "")
+    assert screenshot.warnings == [] and screenshot.capture_meta is None
     assert task.status == "failed"
     assert browser.closed is True
 
@@ -750,6 +751,7 @@ async def test_recapture_failure_reset_clears_warnings_and_meta() -> None:
     screenshot = _screenshot(
         task,
         status="recapturing",
+        captured_with_unstable_dom=True,
         device_type="mobile",
         warnings=old_warnings,
         capture_meta={"v": 1},
@@ -766,6 +768,7 @@ async def test_recapture_failure_reset_clears_warnings_and_meta() -> None:
     assert screenshot.error_message == "Re-capture failed: context crashed"
     assert screenshot.warnings == [] and screenshot.warnings is not old_warnings
     assert screenshot.capture_meta is None
+    assert screenshot.captured_with_unstable_dom is False
     assert screenshot.device_type == "mobile"  # unchanged
 
 
@@ -776,6 +779,7 @@ async def test_reset_orphaned_recapturing_clears_warnings_and_meta() -> None:
     screenshot = _screenshot(
         task,
         status="recapturing",
+        captured_with_unstable_dom=True,
         device_type="tablet",
         warnings=[{"code": "overlays_hidden", "level": "info", "message": "x"}],
         capture_meta={"v": 1},
@@ -786,6 +790,8 @@ async def test_reset_orphaned_recapturing_clears_warnings_and_meta() -> None:
         await reset_orphaned_recapturing(object())
 
     assert screenshot.status == "failed"
+    assert screenshot.error_message == "Re-capture interrupted by worker restart."
+    assert screenshot.captured_with_unstable_dom is False
     assert screenshot.warnings == []
     assert screenshot.capture_meta is None
     assert screenshot.device_type == "tablet"

@@ -1005,11 +1005,13 @@ async def _recompute_task_progress(engine: Any, task_id: uuid.UUID) -> None:
 
 
 def _reset_to_failed(screenshot: Screenshot, message: str) -> None:
-    """Give a row that gets no new capture result the ``failed`` state: no
-    warnings, no capture meta (new values — JSONB tracks no in-place change);
-    its device_type stays."""
+    """Give a row that gets no new capture result the ``failed`` state with
+    *message*: no warnings, no capture meta (new values — JSONB tracks no
+    in-place change), not captured with an unstable DOM; its device_type
+    stays."""
     screenshot.status = "failed"
     screenshot.error_message = message
+    screenshot.captured_with_unstable_dom = False
     screenshot.warnings = []
     screenshot.capture_meta = None
 
