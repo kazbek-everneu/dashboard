@@ -121,6 +121,9 @@ class PrepareResult:
     growth_stopped: bool = False
     overlays_hidden: int = 0
     carousels_paused: int = 0
+    # The signals that asked for the second scroll pass (prepare.pass2_reasons,
+    # e.g. "requests"), led by "forced" when config.FORCE_PASS2 ran it.
+    pass2_reasons: tuple[str, ...] = ()
 
 
 AssetKind = Literal["img", "background", "stylesheet", "font"]

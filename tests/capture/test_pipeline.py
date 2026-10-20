@@ -59,7 +59,7 @@ async def test_run_attempt_captures_a_settled_page() -> None:
     assert outcome.report.warnings == []
     assert len(page.goto_calls) == 1
     assert page.screenshot_kwargs is not None
-    for marker in ("hide-overlays", "wait-fonts", "wp-rocket-render"):
+    for marker in ("hide-overlays", "wait-fonts", "normalize-render"):
         assert marker in page.evaluated
     # Fixed backgrounds are normalized once more right before the screenshot.
     screenshot_index = next(
@@ -68,7 +68,7 @@ async def test_run_attempt_captures_a_settled_page() -> None:
     normalize_indices = [
         index
         for index, event in enumerate(page.events)
-        if event == ("evaluate", "normalize-fixed-bg")
+        if event == ("evaluate", "normalize-render")
     ]
     assert normalize_indices
     assert normalize_indices[-1] < screenshot_index
@@ -86,18 +86,18 @@ async def test_run_attempt_stage_order() -> None:
     assert page.evaluated[verdict_start - 5 : verdict_start] == [
         "pause-videos",
         "trigger-lazy",
-        "wp-rocket-render",
-        "normalize-fixed-bg",
+        "normalize-render",
         "hide-overlays",
+        "pause-carousels",
     ]
     assert page.evaluated[verdict_start:].count("stability-state") == 5
     # ... and the final touches right before the screenshot.
     assert page.events[-1][0] == "screenshot"
     assert page.events[-5:-1] == [
         ("evaluate", "hide-overlays"),
-        ("wait", 500),
+        ("evaluate", "next-frame"),
         ("evaluate", "pause-videos"),
-        ("evaluate", "normalize-fixed-bg"),
+        ("evaluate", "normalize-render"),
     ]
 
 
@@ -183,9 +183,15 @@ async def test_run_attempt_unstable_after_second_timeout_keeps_one_navigation(
         "capturing https://example.com/ with unstable DOM after stabilization "
         "timeout (retry=False)",
     ]
-    # The unstable cleanup (300 ms) replaces the normal final pause (500 ms).
-    assert ("wait", 300) in page.events
-    assert ("wait", 500) not in page.events
+    # The unstable cleanup (one more render normalization before the frame
+    # wait) replaces the normal final touches.
+    assert page.events[-6:-1] == [
+        ("evaluate", "hide-overlays"),
+        ("evaluate", "normalize-render"),
+        ("evaluate", "next-frame"),
+        ("evaluate", "pause-videos"),
+        ("evaluate", "normalize-render"),
+    ]
 
 
 async def test_run_attempt_retry_attempt_skips_second_chance() -> None:

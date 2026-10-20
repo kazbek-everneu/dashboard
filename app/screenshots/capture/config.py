@@ -162,3 +162,32 @@ CHALLENGE_POLL_MS = 500
 CHALLENGE_PAGE_MAX_ELEMENTS = 400
 # Bound of NetworkDiagnostics' per-URL resource registry.
 MAX_RESOURCE_RECORDS = 2000
+
+
+# --- B3: page preparation ---
+
+# Bound of every prepare page script (jsutil.evaluate raises EvaluateTimeout).
+PREPARE_SCRIPT_TIMEOUT_MS = 15_000
+# Font wait before scrolling; readiness waits for fonts again with its own cap.
+PREPARE_FONTS_WAIT_CAP_MS = 3000
+# Adaptive pause after firing the lazy triggers (capped at
+# POST_TRIGGER_WAIT_LAZY_MS / POST_TRIGGER_WAIT_FAST_MS).
+POST_TRIGGER_MIN_MS = 100
+POST_TRIGGER_QUIET_MS = 150
+# Scroll steps: pass 1 = half the viewport height (at least SCROLL_STEP_MIN_PX),
+# pass 2 = PASS2_STEP_RATIO * viewport height.
+SCROLL_STEP_MIN_PX = 300
+PASS2_STEP_RATIO = 0.9
+# Pass 2 runs only when prepare.should_run_pass2 sees a reason; FORCE_PASS2
+# always runs it (bench A/B gate: conditional vs forced second pass).
+FORCE_PASS2 = False
+PASS2_MIN_HEIGHT_GROWTH_PX = 50
+# Infinite-scroll guard: stop scrolling after INFINITE_SCROLL_GROWTHS growths in
+# a row of at least INFINITE_SCROLL_GROWTH_RATIO * viewport height while waiting
+# at the bottom, or once the page is taller than INFINITE_SCROLL_MAX_HEIGHT_PX
+# (3 * 32767).
+INFINITE_SCROLL_GROWTHS = 3
+INFINITE_SCROLL_GROWTH_RATIO = 0.5
+INFINITE_SCROLL_MAX_HEIGHT_PX = 98_301
+# Hidden-overlay records kept in capture_meta["overlays"]["samples"].
+OVERLAY_SAMPLES = 10
