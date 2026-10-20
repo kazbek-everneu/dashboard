@@ -1,8 +1,10 @@
 import asyncio
 import contextlib
+import dataclasses
 import logging
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,6 +22,7 @@ from app.projects.models import (
     normalize_browser,
     normalize_browsers,
 )
+from app.screenshots.capture import profiles
 from app.screenshots.models import Screenshot
 from app.screenshots.service import (
     EffectiveConfig,
@@ -85,6 +88,18 @@ _TIMEOUT_PLACEHOLDER_ERROR = "Task timed out before this capture completed."
 # attempts of its own.
 _CONNECT_ATTEMPTS = 3
 _CONNECT_RETRY_DELAY_S = 1.0
+# Reconnecting a browser that dropped mid-run (or mid-recapture) waits longer:
+# the browser server restarts its launchServer, which takes a few seconds.
+_RECONNECT_ATTEMPTS = 6
+_RECONNECT_DELAYS_S: tuple[float, ...] = (1.0, 2.0, 3.0, 4.0, 5.0)
+# A re-capture hands the capture a deadline this much before its own
+# wait_for fires, so the pipeline can still save a failure with its metadata.
+_RECAPTURE_DEADLINE_MARGIN_S = 15.0
+
+# (url, viewport {width, height}, browser, device_type)
+_Combo = tuple[str, dict[str, int], str, str]
+# (url, browser, device_type, [viewports]) — the viewports share one context
+_Group = tuple[str, str, str, list[dict[str, int]]]
 
 
 def _build_effective_config(
@@ -129,7 +144,21 @@ def _resolve_browser_type(pw: Any, browser_name: str) -> tuple[Any, str | None, 
     return pw.chromium, _CHANNEL_BROWSERS["chrome"], True
 
 
-async def _launch_browser(pw: Any, browser_name: str) -> Any:
+def _connect_retry_delay(delays: Sequence[float] | None, attempt: int) -> float:
+    """Pause after failed connect *attempt* (0-based): ``delays[attempt]`` (the
+    last one repeats), or ``_CONNECT_RETRY_DELAY_S`` without a schedule."""
+    if not delays:
+        return _CONNECT_RETRY_DELAY_S
+    return float(delays[min(attempt, len(delays) - 1)])
+
+
+async def _launch_browser(
+    pw: Any,
+    browser_name: str,
+    *,
+    attempts: int | None = None,
+    delays: Sequence[float] | None = None,
+) -> Any:
     """Obtain a single Playwright browser instance for *browser_name*.
 
     When ``BROWSER_WS_ENDPOINT`` is set (a base host like ``ws://browser``),
@@ -138,9 +167,11 @@ async def _launch_browser(pw: Any, browser_name: str) -> Any:
     ``BROWSER_WS_PATH`` is appended, and the channel + launch args are already
     baked into that server, so chrome/msedge render via their real branded
     binaries. Connection is retried a few times (the server may still be
-    starting). Otherwise launch a local browser as before. Raises on
-    connect/launch failure. A legacy ``chromium`` name (old screenshots being
-    re-captured) is served by chrome.
+    starting): *attempts* tries (default ``_CONNECT_ATTEMPTS``) with the pauses
+    in *delays* between them (default ``_CONNECT_RETRY_DELAY_S`` each).
+    Otherwise launch a local browser as before. Raises on connect/launch
+    failure. A legacy ``chromium`` name (old screenshots being re-captured) is
+    served by chrome.
     """
     browser_name = normalize_browser(browser_name)
     bt, channel, use_chromium_launch_args = _resolve_browser_type(pw, browser_name)
@@ -150,20 +181,21 @@ async def _launch_browser(pw: Any, browser_name: str) -> Any:
         port = _BROWSER_WS_PORTS.get(browser_name, _BROWSER_WS_PORTS["chrome"])
         ws_path = settings.BROWSER_WS_PATH.strip("/")
         endpoint = f"{base.rstrip('/')}:{port}/{ws_path}"
+        tries = max(_CONNECT_ATTEMPTS if attempts is None else attempts, 1)
         last_exc: Exception | None = None
-        for attempt in range(_CONNECT_ATTEMPTS):
+        for attempt in range(tries):
             try:
                 return await bt.connect(
                     endpoint, timeout=settings.BROWSER_CONNECT_TIMEOUT_MS
                 )
             except Exception as exc:
                 last_exc = exc
-                if attempt < _CONNECT_ATTEMPTS - 1:
+                if attempt < tries - 1:
                     logger.warning(
                         "browser %s connect attempt %d/%d failed: %s",
-                        browser_name, attempt + 1, _CONNECT_ATTEMPTS, exc,
+                        browser_name, attempt + 1, tries, exc,
                     )
-                    await asyncio.sleep(_CONNECT_RETRY_DELAY_S)
+                    await asyncio.sleep(_connect_retry_delay(delays, attempt))
         assert last_exc is not None
         raise last_exc
 
@@ -190,14 +222,37 @@ def _capture_limiter(ctx: dict, sem_limit: int) -> CaptureLimiter:
     return limiter
 
 
-def _group_combos(
-    combos: list[tuple[str, dict, str]],
-) -> list[tuple[str, str, list[dict]]]:
-    """Group combos into (url, browser, [viewports]) in first-seen order."""
-    groups: dict[tuple[str, str], list[dict]] = {}
-    for url, viewport, browser_name in combos:
-        groups.setdefault((url, browser_name), []).append(viewport)
-    return [(url, browser, vps) for (url, browser), vps in groups.items()]
+def _group_combos(combos: list[_Combo]) -> list[_Group]:
+    """Group combos into (url, browser, device_type, [viewports]) in
+    first-seen order. A device type needs its own context (``is_mobile``,
+    touch, user agent and locale are context options), so it is part of the
+    key."""
+    groups: dict[tuple[str, str, str], list[dict[str, int]]] = {}
+    for url, viewport, browser_name, device_type in combos:
+        groups.setdefault((url, browser_name, device_type), []).append(viewport)
+    return [
+        (url, browser, device, vps) for (url, browser, device), vps in groups.items()
+    ]
+
+
+def _browser_version(browser: Any) -> str | None:
+    version = getattr(browser, "version", None)
+    return version if isinstance(version, str) else None
+
+
+def _build_profile(
+    browser_name: str, device_type: str, browser: Any
+) -> profiles.DeviceProfile:
+    """The capture profile of *device_type* in *browser_name*, with the
+    connected *browser*'s version for the user agent."""
+    return profiles.build_profile(
+        browser_name, device_type, browser_version=_browser_version(browser)
+    )
+
+
+def _is_connected(browser: Any) -> bool:
+    is_connected = getattr(browser, "is_connected", None)
+    return True if is_connected is None else bool(is_connected())
 
 
 async def _close_quietly(context: Any | None) -> None:
@@ -239,14 +294,15 @@ async def finish_task(
 class _RunPlan:
     project_id: uuid.UUID
     effective: EffectiveConfig
-    combos: list[tuple[str, dict, str]]
+    combos: list[_Combo]
     sem_limit: int
     job_timeout_seconds: int
     reuse_context: bool
 
 
 async def _load_run_plan(engine: Any, tid: uuid.UUID) -> _RunPlan:
-    """Load what a run needs and build its (url, viewport, browser) combos.
+    """Load what a run needs and build its (url, viewport, browser, device_type)
+    combos.
 
     Every value is read while the session is open, so nothing expires later.
     Raises when the task or its ProjectConfig no longer exists.
@@ -282,10 +338,12 @@ async def _load_run_plan(engine: Any, tid: uuid.UUID) -> _RunPlan:
             or config.default_browsers
         )
 
-        combos: list[tuple[str, dict, str]] = []
+        combos: list[_Combo] = []
         for url in task.target_urls:
             for vp in viewports:
+                # Lenient on purpose: stored data predates the input limits.
                 vp_entry = ViewportEntry(**vp)
+                size = {"width": vp_entry.width, "height": vp_entry.height}
                 if vp_entry.browsers:
                     # Per-viewport browser override takes highest priority
                     browsers_to_use = vp_entry.browsers
@@ -293,7 +351,7 @@ async def _load_run_plan(engine: Any, tid: uuid.UUID) -> _RunPlan:
                     # Task-level (or project default) browser list
                     browsers_to_use = task_browsers
                 for browser_name in browsers_to_use:
-                    combos.append((url, vp, browser_name))
+                    combos.append((url, size, browser_name, vp_entry.device_type))
 
         # Effective tuning values (DB override > .env), kept as plain values.
         return _RunPlan(
@@ -315,10 +373,11 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
     1. Claim the task (pending -> running). Any other status means a cancel,
        the reaper or an earlier run got there first: nothing to do.
     2. Load ProjectConfig + settings and build the flat
-       (url x viewport x browser) combination list.
+       (url x viewport x browser, with the viewport's device type) combo list.
     3. Launch Playwright browser(s).
     4. Run the combinations through a consumer pool; every capture holds a slot
        of the worker-wide CaptureLimiter, so concurrent tasks share SEM_LIMIT.
+       Each (url, browser, device type) group captures with one device profile.
     5. Write progress to DB as it goes; beat ``heartbeat_at`` meanwhile.
     6. Set final task status and completed_at.
     """
@@ -356,7 +415,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
     # interrupt handlers working if loading the plan itself fails.
     project_id: uuid.UUID | None = None
     effective: EffectiveConfig | None = None
-    combos: list[tuple[str, dict, str]] = []
+    combos: list[_Combo] = []
     total = 0
     job_timeout_seconds = 0
     progress_done = 0
@@ -431,15 +490,15 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
 
     def _combo_key(
         url: str,
-        viewport: dict,
+        width: int,
+        height: int,
         browser_name: str,
-    ) -> tuple[str, int, int, str]:
-        return (
-            url,
-            int(viewport["width"]),
-            int(viewport["height"]),
-            browser_name,
-        )
+        device_type: str | None,
+    ) -> tuple[str, int, int, str, str]:
+        # A row without a device type (captured by an older worker) counts
+        # as the type its width implies.
+        device = profiles.resolve_device_type({"width": width}, device_type)
+        return (url, int(width), int(height), browser_name, device)
 
     def _is_job_timeout_cancel() -> bool:
         timeout_seconds = job_timeout_seconds
@@ -482,15 +541,21 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
             )
             screenshots = list(result.all())
             existing = {
-                (s.url, int(s.width), int(s.height), s.browser)
+                _combo_key(s.url, s.width, s.height, s.browser, s.device_type)
                 for s in screenshots
             }
 
-            for url, viewport, browser_name in combos:
-                key = _combo_key(url, viewport, browser_name)
+            for url, viewport, browser_name, device_type in combos:
+                key = _combo_key(
+                    url,
+                    viewport["width"],
+                    viewport["height"],
+                    browser_name,
+                    device_type,
+                )
                 if key in existing:
                     continue
-                _, width, height, _ = key
+                _, width, height, _, device = key
                 relative_path = build_file_path(
                     project_id,
                     tid,
@@ -517,6 +582,9 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                         captured_with_unstable_dom=False,
                         error_message=_TIMEOUT_PLACEHOLDER_ERROR,
                         duration_seconds=0.0,
+                        device_type=device,
+                        warnings=[],
+                        capture_meta=None,
                         created_at=utcnow(),
                     )
                 )
@@ -542,9 +610,11 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
         """Return a connected Browser for *browser_name*.
 
         If the (remote) connection dropped, reconnect once under a lock so
-        concurrent consumers don't stampede the browser server. Returns None
-        after a failed reconnect — the whole task is then abandoned instead of
-        grinding every remaining combo through guaranteed capture failures.
+        concurrent consumers don't stampede the browser server; the reconnect
+        retries the connect on the longer ``_RECONNECT_*`` schedule. Returns
+        None after a failed reconnect — the whole task is then abandoned
+        instead of grinding every remaining combo through guaranteed capture
+        failures. Also the capture's ``browser_provider``.
         """
         nonlocal browser_connection_lost
         browser = browser_instances[browser_name]
@@ -562,7 +632,10 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
             )
             try:
                 browser_instances[browser_name] = await _launch_browser(
-                    pw, browser_name
+                    pw,
+                    browser_name,
+                    attempts=_RECONNECT_ATTEMPTS,
+                    delays=_RECONNECT_DELAYS_S,
                 )
             except Exception as exc:
                 logger.error(
@@ -575,19 +648,15 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
 
     async def _capture_one(
         url: str,
-        viewport: dict,
+        viewport: dict[str, int],
         browser_name: str,
+        device_type: str,
+        profile: profiles.DeviceProfile,
         browser: Any,
         context: Any | None,
     ) -> str:
         nonlocal progress_done, progress_failed
-        combo_config = EffectiveConfig(
-            browser=browser_name,
-            fmt=effective.fmt,
-            quality=effective.quality,
-            wait_until=effective.wait_until,
-            timeout=effective.timeout,
-        )
+        combo_config = dataclasses.replace(effective, browser=browser_name)
 
         async with AsyncSession(engine) as session:
             result = await capture_screenshot(
@@ -599,6 +668,9 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                 viewport=viewport,
                 config=combo_config,
                 context=context,
+                profile=profile,
+                device_type=device_type,
+                browser_provider=lambda: _ensure_browser(browser_name),
             )
 
         async with counter_lock:
@@ -628,9 +700,14 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
         )
         return result.status
 
-    async def _run_group(url: str, browser_name: str, group: list[dict]) -> None:
+    async def _run_group(
+        url: str, browser_name: str, device_type: str, group: list[dict[str, int]]
+    ) -> None:
         context: Any | None = None
         context_browser: Any | None = None
+        # One device profile per group, built once the browser (and so its
+        # version, for the user agent) is known.
+        profile: profiles.DeviceProfile | None = None
         try:
             for viewport in group:
                 async with limiter.slot():
@@ -645,13 +722,17 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                     browser = await _ensure_browser(browser_name)
                     if browser is None:
                         return
+                    if profile is None:
+                        profile = _build_profile(browser_name, device_type, browser)
                     if reuse_context and context_browser is not browser:
                         # First viewport, or the browser reconnected under a
                         # now-dead context.
                         await _close_quietly(context)
                         context = context_browser = None
                         try:
-                            context = await open_capture_context(browser, viewport)
+                            context = await open_capture_context(
+                                browser, viewport, profile
+                            )
                             context_browser = browser
                         except Exception as exc:
                             logger.warning(
@@ -660,7 +741,13 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                                 task_id, browser_name, url, exc,
                             )
                     status = await _capture_one(
-                        url, viewport, browser_name, browser, context
+                        url,
+                        viewport,
+                        browser_name,
+                        device_type,
+                        profile,
+                        browser,
+                        context,
                     )
                     if context is not None and status != "ok":
                         # The failure may have left the shared context broken;
@@ -712,22 +799,25 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
         job_timeout_seconds = plan.job_timeout_seconds
         reuse_context = plan.reuse_context
 
-        unique_browsers = {b for _, _, b in combos}
+        unique_browsers = {b for _, _, b, _ in combos}
         logger.info(
             "task=%s starting: combinations=%d browsers=%s",
             task_id, total, sorted(unique_browsers),
         )
 
         limiter = _capture_limiter(ctx, sem_limit)
-        # Queue items are (url, browser, [viewports]). With context reuse all
-        # viewports of one URL in one browser form a group that shares a browser
-        # context (and its HTTP cache); otherwise every combo is its own group.
+        # Queue items are (url, browser, device_type, [viewports]). With context
+        # reuse all viewports of one URL in one browser and device type form a
+        # group that shares a browser context (and its HTTP cache); otherwise
+        # every combo is its own group.
         if reuse_context:
             work_items = _group_combos(combos)
         else:
-            work_items = [(url, browser, [vp]) for url, vp, browser in combos]
+            work_items = [
+                (url, browser, device, [vp]) for url, vp, browser, device in combos
+            ]
         worker_count = sem_limit
-        queue: asyncio.Queue[tuple[str, str, list[dict]] | None] = asyncio.Queue(
+        queue: asyncio.Queue[_Group | None] = asyncio.Queue(
             maxsize=max(sem_limit * 2, 1)
         )
 
@@ -831,6 +921,38 @@ async def _recompute_task_progress(engine: Any, task_id: uuid.UUID) -> None:
         await session.commit()
 
 
+def _reset_to_failed(screenshot: Screenshot, message: str) -> None:
+    """Give a row that gets no new capture result the ``failed`` state: no
+    warnings, no capture meta (new values — JSONB tracks no in-place change);
+    its device_type stays."""
+    screenshot.status = "failed"
+    screenshot.error_message = message
+    screenshot.warnings = []
+    screenshot.capture_meta = None
+
+
+def _recapture_device_type(
+    screenshot: Screenshot, *viewport_lists: list[dict[str, Any]] | None
+) -> str:
+    """The device type to re-capture *screenshot* with: the row's own, else
+    that of the first viewport in *viewport_lists* (the task's overrides, then
+    the project's) with the row's width and height — explicit or auto-detected —
+    else the one its width implies."""
+    if screenshot.device_type:
+        return profiles.resolve_device_type(
+            {"width": screenshot.width}, screenshot.device_type
+        )
+    for viewports in viewport_lists:
+        for vp in viewports or []:
+            try:
+                entry = ViewportEntry(**vp)
+            except (TypeError, ValueError):
+                continue  # malformed stored entry
+            if (entry.width, entry.height) == (screenshot.width, screenshot.height):
+                return entry.device_type
+    return profiles.resolve_device_type({"width": screenshot.width})
+
+
 async def reset_orphaned_recapturing(engine: Any) -> int:
     """Flip screenshots stuck in 'recapturing' back to a terminal state.
 
@@ -848,8 +970,7 @@ async def reset_orphaned_recapturing(engine: Any) -> int:
             return 0
         task_ids: set[uuid.UUID] = set()
         for s in stuck:
-            s.status = "failed"
-            s.error_message = "Re-capture interrupted by worker restart."
+            _reset_to_failed(s, "Re-capture interrupted by worker restart.")
             session.add(s)
             task_ids.add(s.task_id)
         await session.commit()
@@ -910,7 +1031,11 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
 
     Re-runs capture for the same (url, viewport, browser) combination, overwrites
     the same file, updates the same DB row, then refreshes the parent task's
-    counters/status.
+    counters/status. The device profile comes from the row's device type (see
+    _recapture_device_type) and the connected browser's version; the capture
+    gets its own reconnecting browser provider and a deadline
+    ``_RECAPTURE_DEADLINE_MARGIN_S`` before the outer wait_for, which stays as
+    the last resort.
     """
     engine = ctx["db_engine"]
     sid = uuid.UUID(screenshot_id)
@@ -929,8 +1054,7 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
             logger.error(
                 "recapture_screenshot: task missing for screenshot=%s", screenshot_id
             )
-            screenshot.status = "failed"
-            screenshot.error_message = "Parent task no longer exists."
+            _reset_to_failed(screenshot, "Parent task no longer exists.")
             session.add(screenshot)
             await session.commit()
             return
@@ -944,8 +1068,7 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
                 "recapture_screenshot: ProjectConfig missing project=%s screenshot=%s",
                 task.project_id, screenshot_id,
             )
-            screenshot.status = "failed"
-            screenshot.error_message = "Project configuration not found."
+            _reset_to_failed(screenshot, "Project configuration not found.")
             session.add(screenshot)
             await session.commit()
             return
@@ -958,10 +1081,13 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
         browser_name = screenshot.browser
         url = screenshot.url
         viewport = {"width": screenshot.width, "height": screenshot.height}
-        # Reuse the screenshot's own browser + format so build_file_path resolves
-        # to the identical path (same file overwritten in place).
+        device_type = _recapture_device_type(
+            screenshot, task.override_viewports, config.viewports
+        )
+        # The row keeps its file (capture_screenshot writes to its file_path)
+        # and its format; a legacy "chromium" row is captured by chrome.
         combo_config = EffectiveConfig(
-            browser=browser_name,
+            browser=normalize_browser(browser_name),
             fmt=screenshot.file_format,
             quality=app_settings.screenshot_quality,
             wait_until=config.wait_until,
@@ -969,9 +1095,10 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
         )
 
     logger.info(
-        "recapture screenshot=%s task=%s url=%s viewport=%dx%d browser=%s",
+        "recapture screenshot=%s task=%s url=%s viewport=%dx%d browser=%s "
+        "device=%s",
         screenshot_id, task_id, url,
-        viewport["width"], viewport["height"], browser_name,
+        viewport["width"], viewport["height"], browser_name, device_type,
     )
 
     async def _mark_failed(message: str) -> None:
@@ -984,8 +1111,7 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
         async with AsyncSession(engine) as session:
             target = await session.get(Screenshot, sid)
             if target and target.status == "recapturing":
-                target.status = "failed"
-                target.error_message = message
+                _reset_to_failed(target, message)
                 session.add(target)
                 await session.commit()
         await _recompute_task_progress(engine, task_id)
@@ -997,14 +1123,51 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
         # re-captures queues here instead of piling pages onto the browser host.
         async with limiter.slot(), async_playwright() as pw:
             browser = await _launch_browser(pw, browser_name)
+
+            async def _provide_browser() -> Any | None:
+                """The capture's browser provider: the connected browser, or
+                a reconnected one (None when reconnecting fails)."""
+                nonlocal browser
+                if _is_connected(browser):
+                    return browser
+                logger.warning(
+                    "recapture screenshot=%s browser %s disconnected, reconnecting",
+                    screenshot_id, browser_name,
+                )
+                try:
+                    replacement = await _launch_browser(
+                        pw,
+                        browser_name,
+                        attempts=_RECONNECT_ATTEMPTS,
+                        delays=_RECONNECT_DELAYS_S,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "recapture screenshot=%s browser %s reconnect failed: %s",
+                        screenshot_id, browser_name, exc,
+                    )
+                    return None
+                stale, browser = browser, replacement
+                await _close_quietly(stale)
+                return browser
+
             try:
+                profile = _build_profile(
+                    combo_config.browser, device_type, browser
+                )
                 async with AsyncSession(engine) as session:
                     target = await session.get(Screenshot, sid)
                     if not target:
                         return
                     # Bound a single recapture independently of the (2h) batch
                     # job_timeout so a slow/hung page can't pin the row in
-                    # "recapturing" for hours.
+                    # "recapturing" for hours. The capture's own deadline comes
+                    # earlier, so it can still save a failure with metadata.
+                    deadline_at = (
+                        asyncio.get_running_loop().time()
+                        + recapture_timeout
+                        - _RECAPTURE_DEADLINE_MARGIN_S
+                    )
                     await asyncio.wait_for(
                         capture_screenshot(
                             browser=browser,
@@ -1015,6 +1178,10 @@ async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:
                             viewport=viewport,
                             config=combo_config,
                             existing=target,
+                            profile=profile,
+                            device_type=device_type,
+                            browser_provider=_provide_browser,
+                            deadline_at=deadline_at,
                         ),
                         timeout=recapture_timeout,
                     )
