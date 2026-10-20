@@ -94,6 +94,7 @@ JS_PAGE_METRICS = """() => { /*qa:page-metrics*/
             body.clientHeight, html.clientHeight
         ),
         innerWidth: window.innerWidth,
+        clientWidth: html.clientWidth,
         overflowXHidden: hidesOverflowX(html) || hidesOverflowX(body),
         dir,
     };
@@ -124,13 +125,18 @@ def _int(raw: dict[str, Any], key: str) -> int:
 
 def page_metrics_from_raw(raw: object) -> PageMetrics | None:
     """The metrics a ``/*qa:page-metrics*/`` result describes; None when it
-    is not a dict or carries no usable size."""
+    is not a dict or carries no usable size. ``inner_width`` is the layout
+    viewport width (see cfg.LAYOUT_SCROLLBAR_MAX_PX)."""
     if not isinstance(raw, dict):
         return None
+    inner_width = _int(raw, "innerWidth")
+    client_width = _int(raw, "clientWidth")
+    if 0 < client_width < inner_width - cfg.LAYOUT_SCROLLBAR_MAX_PX:
+        inner_width = client_width
     metrics = PageMetrics(
         doc_width=_int(raw, "docWidth"),
         doc_height=_int(raw, "docHeight"),
-        inner_width=_int(raw, "innerWidth"),
+        inner_width=inner_width,
         overflow_hidden=raw.get("overflowXHidden") is True,
         rtl=str(raw.get("dir") or "").lower() == "rtl",
     )
@@ -283,7 +289,8 @@ async def _retry_screenshot(
 async def take_snapshot(run: CaptureRun, *, unstable: bool = False) -> SnapshotResult:
     """Full-page screenshot of ``run.page`` in the configured format.
 
-    Content wider than the layout viewport (``window.innerWidth`` — not the
+    Content wider than the layout viewport (``window.innerWidth``, or the
+    root's clientWidth where emulation widened innerWidth — not the
     configured width: an emulated mobile page without a meta viewport lays
     out at 980 px) is cropped to it with an ``overflow_cropped`` warning (info
     when html/body hide the overflow). The timeout scales with the document

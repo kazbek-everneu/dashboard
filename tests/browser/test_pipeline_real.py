@@ -122,6 +122,30 @@ async def test_visible_overflow_is_cropped_with_a_warning(
 
 
 @pytest.mark.parametrize("engine", ENGINES)
+async def test_mobile_overflow_is_cropped_to_the_device_width(
+    engine, browsers, site
+) -> None:
+    # Chrome's mobile emulation zooms out to the overflowing row and widens
+    # innerWidth to it; the frame must still be the 390 px layout viewport.
+    page = WIDE_PAGE.format(html_attrs="", body_style="").replace(
+        "<title>",
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>',
+    )
+    url = site.add("/", page)
+    browser = await browsers(engine)
+
+    result = await capture(
+        browser, url, browser_name=engine, viewport=(390, 844), device_type="mobile"
+    )
+
+    assert result.ok, result.error
+    assert image_size(result.outcome.data)[0] == 390
+    warning = result.report.warning("overflow_cropped")
+    assert warning is not None, result.report.warning_codes()
+    assert warning.details["viewport_width"] == 390
+
+
+@pytest.mark.parametrize("engine", ENGINES)
 async def test_right_to_left_overflow_keeps_the_right_edge(
     engine, browsers, site
 ) -> None:

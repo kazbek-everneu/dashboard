@@ -311,6 +311,31 @@ def test_page_metrics_from_raw() -> None:
     assert parsed.megapixels == 6.0
 
 
+def test_layout_width_is_client_width_when_emulation_widened_inner_width() -> None:
+    # Chrome mobile emulation on perimeter.net: innerWidth follows the
+    # zoomed-out content, the root's clientWidth stays the layout width.
+    parsed = snapshot.page_metrics_from_raw(
+        metrics(docWidth=5785, innerWidth=1560, clientWidth=390)
+    )
+
+    assert parsed is not None
+    assert parsed.inner_width == 390
+    clip = snapshot.overflow_clip(
+        parsed, {"width": 390, "height": 844}, browser="chrome"
+    )
+    assert clip is not None and clip["width"] == 390
+
+
+@pytest.mark.parametrize("client_width", [1265, 1280, 0, None])
+def test_a_scrollbar_wide_or_missing_client_width_keeps_inner_width(
+    client_width: int | None,
+) -> None:
+    parsed = snapshot.page_metrics_from_raw(metrics(clientWidth=client_width))
+
+    assert parsed is not None
+    assert parsed.inner_width == 1280
+
+
 def test_screenshot_style_neutralises_animations() -> None:
     assert "animation-duration: 0.001s !important;" in snapshot.SCREENSHOT_STYLE
     assert ".aos-init:not(.aos-animate)" in snapshot.SCREENSHOT_STYLE

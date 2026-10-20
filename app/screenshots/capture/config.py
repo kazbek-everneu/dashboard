@@ -276,3 +276,8 @@ SCREENSHOT_MS_PER_MEGAPIXEL = 3_000
 SCREENSHOT_RETRY_PAUSE_MS = 1000
 # Content wider than the layout viewport by more than this is cropped to it.
 OVERFLOW_TOLERANCE_PX = 1
+# The layout viewport is window.innerWidth, unless the root's clientWidth is
+# narrower by more than a scrollbar can take: Chrome's mobile emulation widens
+# innerWidth to the overflowing content it zooms out to (perimeter.net: 1560 at
+# a 390 viewport) while clientWidth stays the layout width.
+LAYOUT_SCROLLBAR_MAX_PX = 32
