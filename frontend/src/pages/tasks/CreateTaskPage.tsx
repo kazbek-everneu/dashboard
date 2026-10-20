@@ -9,7 +9,7 @@ import { ArrowRight, Camera, FolderOpen, Globe } from "lucide-react"
 import { tasksApi } from "@/api/tasks"
 import { projectsApi } from "@/api/projects"
 import { extractApiError } from "@/lib/helpers"
-import { normalizeViewport } from "@/lib/viewportUtils"
+import { DEVICE_EMULATION_HINT, normalizeViewport } from "@/lib/viewportUtils"
 import PageHeader from "@/components/layout/PageHeader"
 import { useBreadcrumbs } from "@/hooks/useBreadcrumbs"
 import { Button } from "@/components/ui/button"
@@ -250,7 +250,9 @@ export default function CreateTaskPage() {
                       <FieldSeparator />
                       <FieldSet>
                         <FieldLegend variant="label">Viewports</FieldLegend>
-                        <FieldDescription>Screen sizes to capture in this task.</FieldDescription>
+                        <FieldDescription>
+                          Screen sizes to capture in this task. {DEVICE_EMULATION_HINT}
+                        </FieldDescription>
                         <ViewportList
                           viewports={taskConfig.viewports}
                           onChange={(vps) => setTaskConfig((c) => ({ ...c, viewports: vps }))}

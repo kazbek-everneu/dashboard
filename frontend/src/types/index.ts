@@ -183,9 +183,8 @@ export interface CreateTaskRequest {
 
 export type ScreenshotStatus = "ok" | "failed" | "recapturing"
 
-/** Codes in the backend's warning registry; any other string still type-checks,
- *  so a newer backend's codes don't break older frontends. */
-export type CaptureWarningCode =
+/** Codes in the backend's warning registry (app/screenshots/capture/report.py). */
+export type KnownCaptureWarningCode =
   | "http_error"
   | "redirected"
   | "challenge_passed"
@@ -203,7 +202,10 @@ export type CaptureWarningCode =
   | "infinite_scroll_stopped"
   | "overlays_hidden"
   | "carousels_paused"
-  | (string & {})
+
+/** A registry code; any other string still type-checks, so a newer backend's
+ *  codes don't break older frontends. */
+export type CaptureWarningCode = KnownCaptureWarningCode | (string & {})
 
 export interface CaptureWarning {
   code: CaptureWarningCode

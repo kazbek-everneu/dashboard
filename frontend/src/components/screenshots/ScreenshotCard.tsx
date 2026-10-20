@@ -12,15 +12,22 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
-import { extractApiError, getDeviceType } from "@/lib/helpers"
+import { extractApiError } from "@/lib/helpers"
+import {
+  DEVICE_LABELS,
+  getScreenshotWarnings,
+  screenshotDeviceType,
+  warningTitle,
+} from "@/lib/screenshot-meta"
 import { browserLabel as formatBrowser } from "@/lib/task-formatters"
+import { Badge } from "@/components/ui/badge"
 import { BrowserIcon } from "@/components/ui/BrowserIcon"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { screenshotsApi } from "@/api/screenshots"
 import { buildImgUrl, getRenderedStripDimensions } from "./screenshot-utils"
-import type { Screenshot } from "@/types"
+import type { CaptureWarning, Screenshot } from "@/types"
 
 const deviceIcons = {
   desktop: Monitor,
@@ -44,6 +51,32 @@ function FooterAction({ label, children }: { label: string; children: React.Reac
   )
 }
 
+/** Count of a capture's warnings; the tooltip names them. */
+function WarningsBadge({ warnings }: { warnings: CaptureWarning[] }) {
+  const count = warnings.length
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          tabIndex={0}
+          className="shrink-0 gap-0.5 bg-status-warning-bg px-1.5 tabular-nums text-status-warning-fg"
+        >
+          <AlertTriangle aria-hidden="true" />
+          {count}
+          <span className="sr-only">{count === 1 ? " capture warning" : " capture warnings"}</span>
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent>
+        <ul className="flex flex-col gap-0.5">
+          {warnings.map((warning, index) => (
+            <li key={`${warning.code}-${index}`}>{warningTitle(warning)}</li>
+          ))}
+        </ul>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 function ScreenshotCardFooter({ screenshot: s }: { screenshot: Screenshot }) {
   const imgUrl = buildImgUrl(s)
   const downloadFilename = [
@@ -53,9 +86,10 @@ function ScreenshotCardFooter({ screenshot: s }: { screenshot: Screenshot }) {
   ].join("_") + `.${s.file_format === "jpeg" ? "jpg" : s.file_format}`
   const browserLabel = formatBrowser(s.browser)
 
-  const deviceType = getDeviceType(s.width)
+  const deviceType = screenshotDeviceType(s)
   const DeviceIcon = deviceIcons[deviceType]
-  const deviceTitle = deviceType.charAt(0).toUpperCase() + deviceType.slice(1)
+  const deviceTitle = DEVICE_LABELS[deviceType]
+  const { warnings } = getScreenshotWarnings(s)
   const [copied, setCopied] = useState(false)
 
   const queryClient = useQueryClient()
@@ -84,11 +118,15 @@ function ScreenshotCardFooter({ screenshot: s }: { screenshot: Screenshot }) {
   }
 
   const statusLabel =
-    s.status === "failed" ? "Failed" : s.captured_with_unstable_dom ? "Captured with unstable DOM" : "OK"
+    s.status === "failed"
+      ? "Failed"
+      : warnings.length > 0
+        ? `OK with ${warnings.length} ${warnings.length === 1 ? "warning" : "warnings"}`
+        : "OK"
 
   return (
     <div className="flex min-w-0 items-center justify-between gap-2 border-t px-3 py-2">
-      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-clip">
         <span title={deviceTitle} className="inline-flex shrink-0">
           <DeviceIcon size={12} className="text-muted-foreground" />
         </span>
@@ -104,16 +142,12 @@ function ScreenshotCardFooter({ screenshot: s }: { screenshot: Screenshot }) {
         <span
           className={cn(
             "inline-block size-1.5 shrink-0 rounded-full",
-            s.status === "failed" ? "bg-destructive" : s.captured_with_unstable_dom ? "bg-warning" : "bg-success",
+            s.status === "failed" ? "bg-destructive" : warnings.length > 0 ? "bg-warning" : "bg-success",
           )}
           title={statusLabel}
           aria-label={statusLabel}
         />
-        {s.captured_with_unstable_dom && (
-          <span title={s.error_message ?? "Captured with unstable DOM"} className="inline-flex shrink-0">
-            <AlertTriangle size={12} className="text-warning" />
-          </span>
-        )}
+        {warnings.length > 0 && <WarningsBadge warnings={warnings} />}
       </div>
 
       <div className="flex shrink-0 items-center">
