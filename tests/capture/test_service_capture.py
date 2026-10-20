@@ -1,5 +1,6 @@
 """capture_screenshot end to end: real pipeline on fakes, files and rows."""
 
+import asyncio
 import importlib
 import logging
 import os
@@ -10,20 +11,24 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import app.screenshots.capture
+from app.screenshots.capture import clock, pipeline
 from app.screenshots.capture.errors import (
     AttemptFailed,
-    PageAssetLoadError,
-    PageStabilizationTimeoutError,
+    BlankPageError,
 )
 from app.screenshots.capture.profiles import DeviceProfile
 from app.screenshots.capture.report import CaptureReport
-from app.screenshots.capture.types import CaptureOutcome, CaptureResult
+from app.screenshots.capture.types import (
+    CaptureOutcome,
+    CaptureResult,
+    ReadinessResult,
+)
 from app.screenshots.models import Screenshot
 from app.screenshots.service import capture_screenshot
 from tests.capture.fakes import (
-    READY_STABILITY_STATE,
     FakeBrowser,
     FakeContext,
     FakePage,
@@ -63,6 +68,25 @@ def _storage(
         yield output_path
 
 
+@contextmanager
+def _results() -> Iterator[list[CaptureResult]]:
+    """Collect what pipeline.capture_with_retries returns to the service."""
+    results: list[CaptureResult] = []
+    real = pipeline.capture_with_retries
+
+    async def spy(**kwargs) -> CaptureResult:
+        result = await real(**kwargs)
+        results.append(result)
+        return result
+
+    with patch("app.screenshots.capture.pipeline.capture_with_retries", spy):
+        yield results
+
+
+def _blank_page() -> AsyncMock:
+    return AsyncMock(return_value=ReadinessResult(blank=True))
+
+
 async def _capture(
     page: FakePage | None, tmp_path: Path, **kwargs
 ) -> tuple[Screenshot, Path]:
@@ -95,25 +119,38 @@ async def test_capture_screenshot_saves_a_settled_page(tmp_path: Path) -> None:
     assert session.record is result
 
 
-async def test_capture_screenshot_fails_after_visible_image_asset_retry(
+async def test_capture_screenshot_saves_a_page_with_a_missing_image(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A broken image no longer costs the screenshot: it is saved with an
+    # assets_missing warning, without a retry or a reload.
+    page = FakePage(script_results={"decode-images": MISSING_IMAGE_STATE})
+    caplog.set_level(logging.INFO, logger="app.screenshots.service")
+
+    with _results() as results:
+        result, output_path = await _capture(page, tmp_path)
+
+    assert result.status == "ok"
+    assert result.error_message is None
+    assert result.captured_with_unstable_dom is False
+    assert output_path.read_bytes() == b"img"
+    assert len(page.goto_calls) == 1
+    assert page.reload_calls == []
+    (capture,) = results
+    assert capture.ok is True and capture.attempts == 1
+    warning = capture.report.warning("assets_missing")
+    assert warning is not None and warning.level == "warning"
+    assert warning.details["count"] == 1
+    assert warning.details["samples"][0]["url"] == "https://cdn.example.com/missing.jpg"
+    capture_lines = [m for m in caplog.messages if m.startswith("capture task=")]
+    assert "status=ok warnings=['assets_missing']" in capture_lines[0]
+
+
+async def test_capture_screenshot_reloads_once_for_an_unreachable_image(
     tmp_path: Path,
 ) -> None:
-    page = FakePage(script_results={"decode-images": MISSING_IMAGE_STATE})
-
-    result, output_path = await _capture(page, tmp_path)
-
-    assert result.status == "failed"
-    assert result.captured_with_unstable_dom is False
-    # Same text as before the split, retry included.
-    assert result.error_message == (
-        "Visible page assets did not load: 1 visible img; samples: img: "
-        "https://cdn.example.com/missing.jpg; ignored hidden pending images: 2"
-    )
-    assert len(page.goto_calls) == 2
-    assert not output_path.exists()
-
-
-async def test_capture_screenshot_includes_network_diagnostics(tmp_path: Path) -> None:
+    # The network says the image failed to connect: worth one reload in
+    # place; it stays broken, so the screenshot is saved with the warning.
     page = FakePage(
         script_results={
             "decode-images": {**MISSING_IMAGE_STATE, "hiddenPendingImageCount": 0}
@@ -134,45 +171,67 @@ async def test_capture_screenshot_includes_network_diagnostics(tmp_path: Path) -
         ],
     )
 
-    result, _ = await _capture(page, tmp_path)
+    with _results() as results:
+        result, output_path = await _capture(page, tmp_path)
 
-    assert result.status == "failed"
-    assert result.error_message is not None
-    assert "Network diagnostics" in result.error_message
-    assert "net::ERR_CONNECTION_RESET" in result.error_message
-    assert "HTTP 403" in result.error_message
+    assert result.status == "ok"
+    assert result.error_message is None
+    assert output_path.read_bytes() == b"img"
+    assert len(page.goto_calls) == 1
+    assert len(page.reload_calls) == 1
+    (capture,) = results
+    assert capture.attempts == 1
+    codes = capture.report.warning_codes()
+    assert "page_reloaded" in codes and "assets_missing" in codes
+    missing = capture.report.warning("assets_missing")
+    assert missing is not None
+    assert missing.details["samples"][0]["url"] == "https://cdn.example.com/missing.jpg"
+    assert missing.details["samples"][0]["category"] == "network"
+    assert [w["code"] for w in result.warnings] == codes
 
 
-async def test_capture_screenshot_does_not_save_blank_assetless_page(
-    tmp_path: Path,
-) -> None:
+async def test_capture_screenshot_does_not_save_blank_page(tmp_path: Path) -> None:
     page = FakePage(
-        script_results={
-            "stability-state": {
-                **READY_STABILITY_STATE,
-                "scrollHeight": 720,
-                "textLength": 0,
-            }
-        }
+        failed_requests=[
+            FakeRequest(
+                resource_type="stylesheet",
+                url="https://cdn.example.com/app.css",
+                failure="net::ERR_CONNECTION_RESET",
+            )
+        ],
     )
+    browser = FakeBrowser(page)
 
-    result, output_path = await _capture(page, tmp_path)
+    with (
+        patch("app.screenshots.capture.readiness.finalize", _blank_page()),
+        _results() as results,
+    ):
+        result, output_path = await _capture(page, tmp_path, browser=browser)
 
     assert result.status == "failed"
     assert result.error_message == (
         "Page rendered blank after stabilization: no visible text or "
-        "image/background assets"
+        "image/background assets; Network diagnostics: failed requests: "
+        "stylesheet net::ERR_CONNECTION_RESET https://cdn.example.com/app.css"
     )
     assert not output_path.exists()
+    # A blank page is retried in a fresh context.
+    assert len(browser.contexts) == 2
+    (capture,) = results
+    assert isinstance(capture.error, BlankPageError)
+    assert capture.report.meta["failure"] == {
+        "class": "BlankPageError",
+        "phase": "readiness",
+    }
 
 
 async def test_capture_screenshot_recovers_when_load_event_times_out(
     tmp_path: Path,
 ) -> None:
     # A page whose `load` event never fires (third-party stall) must still
-    # produce an `ok` screenshot via the domcontentloaded fallback rather than
+    # produce an `ok` screenshot after the DOMContentLoaded goto rather than
     # a timeout `failed` row.
-    page = FakePage(goto_timeout_levels={"load"})
+    page = FakePage(load_state_error=PlaywrightTimeoutError("Timeout 1000ms"))
 
     result, output_path = await _capture(page, tmp_path)
 
@@ -184,24 +243,31 @@ async def test_capture_screenshot_navigation_timeout_is_not_retried(
     tmp_path: Path,
 ) -> None:
     page = FakePage(goto_timeout_levels={"load", "domcontentloaded"})
+    browser = FakeBrowser(page)
 
-    result, _ = await _capture(page, tmp_path)
+    with _results() as results:
+        result, _ = await _capture(page, tmp_path, browser=browser)
 
     assert result.status == "failed"
     assert result.error_message == (
         "Navigation timed out after 1000 ms: https://example.com/"
     )
-    # One goto per attempt; this pipeline still retries NavigationTimeoutError.
-    assert len(page.goto_calls) == 2
+    assert len(page.goto_calls) == 1  # one goto, one attempt
+    assert len(browser.contexts) == 1
+    (capture,) = results
+    assert capture.report.meta["failure"]["class"] == "NavigationTimeoutError"
+    assert capture.report.meta["attempts"] == 1
 
 
 async def test_capture_screenshot_stores_the_unstable_dom_warning(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    stability = AsyncMock(side_effect=PageStabilizationTimeoutError("busy"))
+    unsettled = AsyncMock(
+        return_value=ReadinessResult(stable=False, unstable_reason="dom")
+    )
     caplog.set_level(logging.INFO, logger="app.screenshots.service")
 
-    with patch("app.screenshots.capture.readiness.wait_for_dom_stability", stability):
+    with patch("app.screenshots.capture.readiness.finalize", unsettled):
         result, output_path = await _capture(FakePage(), tmp_path)
 
     assert result.status == "ok"
@@ -249,9 +315,9 @@ async def test_capture_screenshot_logs_failures_too(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger="app.screenshots.service")
-    page = FakePage(script_results={"decode-images": MISSING_IMAGE_STATE})
 
-    await _capture(page, tmp_path)
+    with patch("app.screenshots.capture.readiness.finalize", _blank_page()):
+        await _capture(FakePage(), tmp_path)
 
     capture_lines = [m for m in caplog.messages if m.startswith("capture task=")]
     assert len(capture_lines) == 1
@@ -261,7 +327,7 @@ async def test_capture_screenshot_logs_failures_too(
 async def test_capture_screenshot_records_attempt_time_for_failed_rows(
     tmp_path: Path,
 ) -> None:
-    failing = AsyncMock(side_effect=PageAssetLoadError("missing"))
+    failing = AsyncMock(side_effect=BlankPageError("missing"))
     # attempt 1: 10 → 13 s, attempt 2: 20 → 24 s
     clock = iter([10.0, 13.0, 20.0, 24.0])
 
@@ -280,7 +346,7 @@ async def test_capture_screenshot_retries_in_fresh_context(tmp_path: Path) -> No
     shared = FakeContext()
     run_attempt = AsyncMock(
         side_effect=[
-            AttemptFailed(PageAssetLoadError("missing"), CaptureReport()),
+            AttemptFailed(BlankPageError(), CaptureReport()),
             CaptureOutcome(data=b"img", duration=0.5),
         ]
     )
@@ -345,6 +411,63 @@ async def test_capture_screenshot_builds_the_profile_from_device_type(
     assert by_width.device_type == "mobile"
     # Built with the browser's version, so the device user agent is set too.
     assert explicit.emulation == by_width.emulation == "full"
+
+
+async def test_capture_screenshot_fails_when_the_browser_cannot_come_back(
+    tmp_path: Path,
+) -> None:
+    page = FakePage()
+    provider = AsyncMock(return_value=None)
+
+    result, output_path = await _capture(
+        page,
+        tmp_path,
+        browser=FakeBrowser(page, connected=False),
+        browser_provider=provider,
+    )
+
+    assert result.status == "failed"
+    assert result.error_message == "Browser connection lost; reconnect failed"
+    assert not output_path.exists()
+    provider.assert_awaited_once()
+    assert page.goto_calls == []
+
+
+async def test_capture_screenshot_attempt_deadline_fails_the_row(
+    tmp_path: Path,
+) -> None:
+    async def hang(*_args, **_kwargs) -> None:
+        await asyncio.get_running_loop().create_future()
+
+    with (
+        patch("app.screenshots.capture.config.CLOSE_TIMEOUT_S", 0.05),
+        patch("app.screenshots.capture.config.ATTEMPT_BUDGET_MIN_S", 0.05),
+        patch("app.screenshots.capture.config.ATTEMPT_BUDGET_MAX_S", 0.05),
+        patch(
+            "app.screenshots.capture.prepare.prepare_page", AsyncMock(side_effect=hang)
+        ),
+        _results() as results,
+    ):
+        result, _ = await asyncio.wait_for(_capture(FakePage(), tmp_path), 5)
+
+    assert result.status == "failed"
+    assert result.error_message == "Capture attempt ran out of time (phase: prepare)"
+    (capture,) = results
+    assert capture.attempts == 2
+    assert not isinstance(capture.error, TimeoutError)
+
+
+async def test_capture_screenshot_passes_the_deadline_to_the_attempts(
+    tmp_path: Path,
+) -> None:
+    run_attempt = AsyncMock(return_value=CaptureOutcome(data=b"img", duration=0.5))
+    deadline_at = clock.now() + 120
+
+    with patch("app.screenshots.capture.pipeline.run_attempt", run_attempt):
+        result, _ = await _capture(FakePage(), tmp_path, deadline_at=deadline_at)
+
+    assert result.status == "ok"
+    assert 115 < run_attempt.await_args.kwargs["budget_s"] <= 120
 
 
 def test_importing_the_capture_package_disables_fonts_ready_wait(

@@ -49,9 +49,6 @@ MAX_RETRY_SETTLE_TIMEOUT_MS = 37500
 # Caps of the self-bounded page waits within a readiness window.
 FONTS_WAIT_CAP_MS = 5000
 DECODE_WAIT_CAP_MS = 12000
-# Fixed pauses right before the screenshot (stable / unstable capture).
-FINAL_SETTLE_MS = 500
-UNSTABLE_SETTLE_MS = 300
 # Extra time the outer asyncio safety net allows on top of a timeout the page
 # script already enforces itself.
 JS_TIMEOUT_GRACE_MS = 2000
@@ -234,3 +231,48 @@ NETWORK_FAILURE_MARKERS = (
     "network connection was lost",
     "timed out",
 )
+
+
+# --- B5: pipeline & snapshot ---
+
+# Page scripts (jsutil.evaluate): the default bound of one script, and how long
+# a script whose document was replaced under it (a late client-side redirect)
+# waits for the new document's DOMContentLoaded before its one re-run.
+EVALUATE_TIMEOUT_MS = 15_000
+CONTEXT_DESTROYED_WAIT_MS = 5000
+
+# Attempt budget: clamp(ATTEMPT_BUDGET_PER_TIMEOUT x project timeout +
+# ATTEMPT_BUDGET_BASE_S, ATTEMPT_BUDGET_MIN_S, ATTEMPT_BUDGET_MAX_S) seconds,
+# never past the caller's deadline_at. Past the budget an attempt fails with
+# CaptureDeadlineExceeded: its page/context is closed under it (bounded by
+# CLOSE_TIMEOUT_S) and the attempt gets as long again to unwind before it is
+# cancelled; a cancelled capture gets CANCEL_SETTLE_S for that.
+ATTEMPT_BUDGET_PER_TIMEOUT = 4
+ATTEMPT_BUDGET_BASE_S = 90
+ATTEMPT_BUDGET_MIN_S = 240
+ATTEMPT_BUDGET_MAX_S = 480
+CLOSE_TIMEOUT_S = 10
+CANCEL_SETTLE_S = 2
+# A retry attempt only starts with at least this much left of deadline_at.
+RETRY_MIN_REMAINING_S = 60
+
+# Optional steps run only when the attempt budget has room for them, else
+# they are skipped with a recovery_skipped info warning:
+# - the in-place second readiness chance needs its window + this spare;
+SECOND_CHANCE_SPARE_S = 10
+# - a recovery reload needs this x the time already spent on navigation +
+#   prepare + readiness (and keeps RELOAD_RESERVE_S of the budget to fall
+#   back to the snapshot taken before it);
+RELOAD_COST_FACTOR = 1.5
+RELOAD_RESERVE_S = 5
+# - an in-place screenshot retry needs this much.
+SCREENSHOT_RETRY_MIN_S = 30
+
+# page.screenshot timeout: max(project timeout, SCREENSHOT_MIN_TIMEOUT_MS,
+# SCREENSHOT_MS_PER_MEGAPIXEL x document megapixels), capped by the budget.
+# After a timeout the screenshot is retried once after this pause.
+SCREENSHOT_MIN_TIMEOUT_MS = 90_000
+SCREENSHOT_MS_PER_MEGAPIXEL = 3_000
+SCREENSHOT_RETRY_PAUSE_MS = 1000
+# Content wider than the layout viewport by more than this is cropped to it.
+OVERFLOW_TOLERANCE_PX = 1

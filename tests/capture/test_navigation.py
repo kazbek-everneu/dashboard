@@ -590,7 +590,8 @@ async def test_navigate_ignores_a_challenge_check_that_cannot_run() -> None:
     result = await navigation.navigate(make_run(page=page))
 
     assert result.challenge is None
-    assert page.evaluated == ["detect-challenge", "detect-challenge"]
+    # jsutil.evaluate re-runs a script once after a late redirect itself.
+    assert page.evaluated == ["detect-challenge"] * 4
 
 
 # ---------------------------------------------------------------------------
