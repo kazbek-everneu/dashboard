@@ -12,11 +12,11 @@ export function FilterToolbar({ filters, actions, className }: FilterToolbarProp
   return (
     <div
       className={cn(
-        "glass-card flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between",
+        "flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between",
         className,
       )}
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-2.5">{filters}</div>
+      <div className="flex min-w-0 flex-wrap items-center gap-2">{filters}</div>
       {actions ? <div className="flex flex-wrap items-center gap-2 lg:justify-end">{actions}</div> : null}
     </div>
   )

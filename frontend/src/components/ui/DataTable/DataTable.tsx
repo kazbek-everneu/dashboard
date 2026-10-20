@@ -1,10 +1,12 @@
 import React from "react"
 import { cn } from "@/lib/utils"
+import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
+import { StateMessage } from "@/components/ui/StateMessage"
 import { DataTableHeader } from "./DataTableHeader"
 import { DataTableRow } from "./DataTableRow"
 import { DataTableSkeleton } from "./DataTableSkeleton"
 import { DataTablePagination } from "./DataTablePagination"
-import { StateMessage } from "@/components/ui/StateMessage"
+import type { Density } from "./density"
 
 export interface RowAction<T> {
   label: string
@@ -55,7 +57,7 @@ export interface DataTableProps<T> {
   /** Rows always shown at the top before regular rows */
   pinnedRows?: T[]
   className?: string
-  density?: "default" | "compact"
+  density?: Density
 }
 
 export function DataTable<T,>({
@@ -82,9 +84,9 @@ export function DataTable<T,>({
   const allRows = [...(pinnedRows ?? []), ...regularRows]
 
   return (
-    <div className={cn("space-y-3", className)}>
-      <div className="glass-card overflow-hidden">
-        <table className="w-full text-sm">
+    <div className={cn("flex flex-col gap-3", className)}>
+      <div className="overflow-hidden rounded-xl border bg-card">
+        <Table>
           <DataTableHeader
             columns={columns}
             hasActions={hasActions}
@@ -92,26 +94,27 @@ export function DataTable<T,>({
             onSortChange={onSortChange}
             density={density}
           />
-          <tbody>
+          <TableBody>
             {isLoading ? (
-              <DataTableSkeleton columns={columns} hasActions={hasActions} />
+              <DataTableSkeleton columns={columns} hasActions={hasActions} density={density} />
             ) : allRows.length === 0 ? (
-              <tr>
-                <td colSpan={colSpan}>
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={colSpan} className="p-0 whitespace-normal">
                   {emptyState ? (
                     <StateMessage
                       icon={emptyState.icon}
                       title={emptyState.title}
                       description={emptyState.description}
                       action={emptyState.action}
+                      className="border-0"
                     />
                   ) : (
-                    <StateMessage title="No data" compact />
+                    <StateMessage title="No data" compact className="border-0" />
                   )}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : (
-              allRows.map((row, i) => (
+              allRows.map((row) => (
                 <DataTableRow
                   key={rowKey(row)}
                   row={row}
@@ -119,13 +122,12 @@ export function DataTable<T,>({
                   onRowClick={onRowClick}
                   actions={rowActions?.(row)}
                   isPinned={pinnedKeys.has(rowKey(row))}
-                  isLast={i === allRows.length - 1}
                   density={density}
                 />
               ))
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
       {pagination && pagination.total > pagination.pageSize && (

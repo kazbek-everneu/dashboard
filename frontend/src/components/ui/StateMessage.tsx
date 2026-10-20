@@ -1,6 +1,14 @@
 import type { ReactNode } from "react"
 
 import { cn } from "@/lib/utils"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 
 interface StateMessageProps {
   title: string
@@ -22,30 +30,27 @@ export function StateMessage({
   className,
 }: StateMessageProps) {
   return (
-    <div
+    <Empty
       className={cn(
-        "glass-card flex flex-col items-center justify-center px-6 text-center",
-        compact ? "min-h-[180px] py-10" : "min-h-[260px] py-14",
+        "border",
+        compact ? "min-h-[180px]" : "min-h-[260px]",
+        tone === "destructive" && "border-destructive/30",
         className,
       )}
     >
-      {icon ? (
-        <div
-          className={cn(
-            "mb-4 flex h-14 w-14 items-center justify-center border",
-            tone === "destructive"
-              ? "border-destructive/20 bg-destructive/10 text-destructive"
-              : "bg-background text-foreground",
-          )}
-        >
-          <div className="[&>*]:h-6 [&>*]:w-6">{icon}</div>
-        </div>
-      ) : null}
-      <p className={cn("text-base font-semibold", tone === "destructive" ? "text-destructive" : "text-foreground")}>
-        {title}
-      </p>
-      {description ? <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">{description}</p> : null}
-      {action ? <div className="mt-5">{action}</div> : null}
-    </div>
+      <EmptyHeader>
+        {icon ? (
+          <EmptyMedia
+            variant="icon"
+            className={cn(tone === "destructive" && "bg-destructive/10 text-destructive")}
+          >
+            {icon}
+          </EmptyMedia>
+        ) : null}
+        <EmptyTitle className={cn(tone === "destructive" && "text-destructive")}>{title}</EmptyTitle>
+        {description ? <EmptyDescription>{description}</EmptyDescription> : null}
+      </EmptyHeader>
+      {action ? <EmptyContent>{action}</EmptyContent> : null}
+    </Empty>
   )
 }

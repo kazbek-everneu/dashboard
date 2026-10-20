@@ -1,12 +1,15 @@
-import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react"
+import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react"
+import { cn } from "@/lib/utils"
+import { TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import type { ColumnDef } from "./DataTable"
+import { CELL_PADDING, type Density } from "./density"
 
 interface DataTableHeaderProps<T> {
   columns: ColumnDef<T>[]
   hasActions: boolean
   sort?: { key: string; direction: "asc" | "desc" }
   onSortChange?: (key: string, direction: "asc" | "desc") => void
-  density?: "default" | "compact"
+  density?: Density
 }
 
 export function DataTableHeader<T,>({
@@ -26,47 +29,51 @@ export function DataTableHeader<T,>({
   }
 
   return (
-    <thead className="sticky-table-head border-b surface-divider">
-      <tr>
+    <TableHeader className="bg-muted/50">
+      <TableRow className="hover:bg-transparent">
         {columns.map((col) => {
           const isSortable = !!col.sortKey && !!onSortChange
           const isActive = sort?.key === col.key
+          const SortIcon = !isActive ? ArrowUpDown : sort?.direction === "asc" ? ArrowUp : ArrowDown
 
           return (
-            <th
+            <TableHead
               key={col.key}
-              className={[
-                col.hideOnMobile ? "hidden sm:table-cell" : "",
-                col.width ?? "",
-                density === "compact" ? "px-4 py-3" : "px-5 py-4",
-                "text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground",
-                isSortable ? "cursor-pointer select-none hover:text-foreground" : "",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-              onClick={isSortable ? () => handleSort(col.key) : undefined}
+              aria-sort={
+                isActive ? (sort?.direction === "asc" ? "ascending" : "descending") : undefined
+              }
+              className={cn(
+                "h-10 text-muted-foreground",
+                CELL_PADDING[density],
+                "py-0",
+                col.hideOnMobile && "hidden sm:table-cell",
+                col.width,
+              )}
             >
-              <span className="inline-flex items-center gap-1">
-                {col.header}
-                {isSortable && (
-                  <>
-                    {!isActive && (
-                      <ChevronsUpDown className="h-3 w-3 opacity-50" />
-                    )}
-                    {isActive && sort?.direction === "asc" && (
-                      <ChevronUp className="h-3 w-3" />
-                    )}
-                    {isActive && sort?.direction === "desc" && (
-                      <ChevronDown className="h-3 w-3" />
-                    )}
-                  </>
-                )}
-              </span>
-            </th>
+              {isSortable ? (
+                <button
+                  type="button"
+                  onClick={() => handleSort(col.key)}
+                  className={cn(
+                    "-mx-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-1 outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
+                    isActive && "text-foreground",
+                  )}
+                >
+                  {col.header}
+                  <SortIcon className={cn("size-3.5", !isActive && "opacity-50")} />
+                </button>
+              ) : (
+                col.header
+              )}
+            </TableHead>
           )
         })}
-        {hasActions && <th className={density === "compact" ? "w-[80px] px-4 py-3" : "w-[88px] px-5 py-4"} />}
-      </tr>
-    </thead>
+        {hasActions && (
+          <TableHead className={cn("w-14", CELL_PADDING[density], "py-0")}>
+            <span className="sr-only">Actions</span>
+          </TableHead>
+        )}
+      </TableRow>
+    </TableHeader>
   )
 }
