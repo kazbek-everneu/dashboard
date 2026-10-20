@@ -2,11 +2,13 @@
 broken assets that no longer cost the screenshot and their recovery (item 12),
 and the image height of a mobile 100vh hero."""
 
-import inspect
+import asyncio
+import gc
 
 import pytest
 
-from app.screenshots.capture import navigation, pipeline
+from app.screenshots.capture import pipeline
+from app.screenshots.capture.errors import AttemptFailed, CaptureDeadlineExceeded
 from app.screenshots.capture.profiles import DeviceProfile
 from tests.browser.helpers import (
     ENGINES,
@@ -71,10 +73,6 @@ html, body { margin: 0; }
 .rest { height: 1500px; background: #0000ff; }
 </style></head><body><div class="hero">hero</div><div class="rest">rest</div>
 </body></html>"""
-
-
-def _reload_implemented() -> bool:
-    return "NotImplementedError" not in inspect.getsource(navigation.reload)
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -172,10 +170,9 @@ async def test_missing_image_keeps_the_screenshot(engine, browsers, site) -> Non
     assert site.hits["/"] == 1
 
 
+# TODO(integration): drop the marker once readiness reports stylesheet issues.
 @pytest.mark.xfail(
-    not _reload_implemented(),
-    reason="needs B2's navigation.reload and B4's stylesheet issues",
-    strict=False,
+    reason="readiness does not report stylesheet issues yet (B4)", strict=False
 )
 @pytest.mark.parametrize("engine", ENGINES)
 async def test_stylesheet_served_as_html_once_is_recovered(
@@ -231,3 +228,40 @@ async def test_mobile_100vh_hero_keeps_the_viewport_height(
     assert near(inside, RED), inside
     assert near(after, BLUE), after
     assert result.report.meta["device"]["is_mobile"] is True
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+async def test_attempt_deadline_during_goto_leaves_no_stray_errors(
+    engine, browsers, site
+) -> None:
+    url = site.add("/", "<p>never answered</p>", hang=True)
+    browser = await browsers(engine)
+    loop = asyncio.get_running_loop()
+    reported: list[dict] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+
+    try:
+        with pytest.raises(AttemptFailed) as exc_info:
+            await pipeline.run_attempt(
+                browser,
+                url,
+                {"width": 1280, "height": 800},
+                make_config(engine),
+                None,
+                budget_s=3,
+            )
+        error = exc_info.value.error
+        del exc_info
+        for _ in range(10):
+            await asyncio.sleep(0.1)
+        gc.collect()
+        await asyncio.sleep(0.2)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert isinstance(error, CaptureDeadlineExceeded)
+    assert error.phase == "goto"
+    # Closing the page under the goto lets the goto fail in its own task:
+    # no "Future exception was never retrieved".
+    assert [context.get("message") for context in reported] == []

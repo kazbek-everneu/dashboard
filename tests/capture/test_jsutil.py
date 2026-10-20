@@ -136,7 +136,7 @@ async def test_evaluate_reruns_once_after_a_late_redirect() -> None:
     assert await jsutil.evaluate(page, MARKED, 3) == 42
 
     assert page.evaluate_calls == [("probe", 3), ("probe", 3)]
-    assert page.load_state_calls == [("domcontentloaded", {"timeout": 10_000})]
+    assert page.load_state_calls == [("domcontentloaded", {"timeout": 5000})]
     # The new document is awaited between the two runs.
     assert page.events == [
         ("evaluate", "probe"),

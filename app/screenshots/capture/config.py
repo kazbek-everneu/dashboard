@@ -242,17 +242,20 @@ NETWORK_FAILURE_MARKERS = (
 # a script whose document was replaced under it (a late client-side redirect)
 # waits for the new document's DOMContentLoaded before its one re-run.
 EVALUATE_TIMEOUT_MS = 15_000
-CONTEXT_DESTROYED_WAIT_MS = 10_000
+CONTEXT_DESTROYED_WAIT_MS = 5000
 
 # Attempt budget: clamp(ATTEMPT_BUDGET_PER_TIMEOUT x project timeout +
 # ATTEMPT_BUDGET_BASE_S, ATTEMPT_BUDGET_MIN_S, ATTEMPT_BUDGET_MAX_S) seconds,
 # never past the caller's deadline_at. Past the budget an attempt fails with
-# CaptureDeadlineExceeded; its page/context close is bounded by CLOSE_TIMEOUT_S.
+# CaptureDeadlineExceeded: its page/context is closed under it (bounded by
+# CLOSE_TIMEOUT_S) and the attempt gets as long again to unwind before it is
+# cancelled; a cancelled capture gets CANCEL_SETTLE_S for that.
 ATTEMPT_BUDGET_PER_TIMEOUT = 4
 ATTEMPT_BUDGET_BASE_S = 90
 ATTEMPT_BUDGET_MIN_S = 240
 ATTEMPT_BUDGET_MAX_S = 480
 CLOSE_TIMEOUT_S = 10
+CANCEL_SETTLE_S = 2
 # A retry attempt only starts with at least this much left of deadline_at.
 RETRY_MIN_REMAINING_S = 60
 

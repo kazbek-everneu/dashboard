@@ -14,7 +14,7 @@ import pytest
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import app.screenshots.capture
-from app.screenshots.capture import pipeline
+from app.screenshots.capture import clock, pipeline
 from app.screenshots.capture.errors import (
     AttemptFailed,
     BlankPageError,
@@ -428,6 +428,7 @@ async def test_capture_screenshot_attempt_deadline_fails_the_row(
         await asyncio.get_running_loop().create_future()
 
     with (
+        patch("app.screenshots.capture.config.CLOSE_TIMEOUT_S", 0.05),
         patch("app.screenshots.capture.config.ATTEMPT_BUDGET_MIN_S", 0.05),
         patch("app.screenshots.capture.config.ATTEMPT_BUDGET_MAX_S", 0.05),
         patch(
@@ -448,7 +449,7 @@ async def test_capture_screenshot_passes_the_deadline_to_the_attempts(
     tmp_path: Path,
 ) -> None:
     run_attempt = AsyncMock(return_value=CaptureOutcome(data=b"img", duration=0.5))
-    deadline_at = asyncio.get_running_loop().time() + 120
+    deadline_at = clock.now() + 120
 
     with patch("app.screenshots.capture.pipeline.run_attempt", run_attempt):
         result, _ = await _capture(FakePage(), tmp_path, deadline_at=deadline_at)

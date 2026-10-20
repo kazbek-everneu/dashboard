@@ -1,17 +1,25 @@
 import asyncio
+import gc
 import logging
 import math
 from collections.abc import Callable
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from playwright._impl._errors import TargetClosedError
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from app.screenshots.capture import (
+    clock,
+    navigation,
+    pipeline,
+    prepare,
+    readiness,
+    snapshot,
+)
 from app.screenshots.capture import config as cfg
-from app.screenshots.capture import navigation, pipeline, prepare, readiness, snapshot
 from app.screenshots.capture.errors import (
     AttemptFailed,
     BlankPageError,
@@ -262,7 +270,7 @@ async def test_run_attempt_blank_page_raises_blank_page_error() -> None:
     assert page.screenshot_kwargs is None
 
 
-async def test_run_attempt_turns_a_goto_timeout_into_a_navigation_timeout() -> None:
+async def test_run_attempt_wraps_a_navigation_timeout_and_closes_the_context() -> None:
     page = FakePage(goto_timeout_levels={"load", "domcontentloaded"})
     browser = FakeBrowser(page)
 
@@ -271,7 +279,7 @@ async def test_run_attempt_turns_a_goto_timeout_into_a_navigation_timeout() -> N
 
     error = exc_info.value.error
     assert isinstance(error, NavigationTimeoutError)
-    assert str(error) == "Timeout 1000ms exceeded"
+    assert str(error) == "Navigation timed out after 1000 ms: https://example.com/"
     assert exc_info.value.report.current_phase == "goto"
     assert browser.contexts[0].closed is True
 
@@ -373,6 +381,7 @@ async def test_run_attempt_deadline_names_the_phase_and_closes_the_context() -> 
     browser = FakeBrowser(page)
 
     with (
+        patch("app.screenshots.capture.config.CLOSE_TIMEOUT_S", 0.05),
         patch(
             "app.screenshots.capture.readiness.finalize", AsyncMock(side_effect=_hang)
         ),
@@ -406,6 +415,68 @@ async def test_run_attempt_deadline_close_is_bounded() -> None:
     assert isinstance(exc_info.value.error, CaptureDeadlineExceeded)
     assert exc_info.value.error.phase == "prepare"
     page.close.assert_awaited_once()
+
+
+class _PendingGotoPage(FakePage):
+    """A goto that waits on a protocol future the way Playwright's
+    Channel._inner_send does (asyncio.wait, so cancelling the caller leaves
+    the future pending); closing the page fails it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.pending: asyncio.Future | None = None
+
+    async def goto(self, url: str, **kwargs: Any):
+        self.goto_calls.append((url, kwargs))
+        pending = asyncio.get_running_loop().create_future()
+        self.pending = pending
+        await asyncio.wait({pending})
+        return pending.result()
+
+    async def close(self) -> None:
+        await super().close()
+        if self.pending is not None and not self.pending.done():
+            self.pending.set_exception(TargetClosedError())
+        self.pending = None
+
+
+async def test_run_attempt_deadline_leaves_no_unretrieved_playwright_error() -> None:
+    loop = asyncio.get_running_loop()
+    reported: list[dict] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+    page = _PendingGotoPage()
+
+    try:
+        with pytest.raises(AttemptFailed) as exc_info:
+            await _run(page, context=FakeContext(page), budget_s=0.05)
+        error_type = type(exc_info.value.error)
+        phase = getattr(exc_info.value.error, "phase", None)
+        del exc_info  # its tracebacks would keep an abandoned future alive
+        for _ in range(3):
+            await asyncio.sleep(0)
+        gc.collect()
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert error_type is CaptureDeadlineExceeded
+    assert phase == "goto"
+    # The page was closed under the goto, which then failed in its own task.
+    assert page.closed is True
+    assert reported == []
+
+
+async def test_run_attempt_cancelled_closes_the_page_first() -> None:
+    page = _PendingGotoPage()
+    task = asyncio.ensure_future(_run(page, context=FakeContext(page)))
+    while not page.goto_calls:
+        await asyncio.sleep(0)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert page.closed is True
 
 
 async def test_run_attempt_never_lets_a_bare_timeout_error_out() -> None:
@@ -532,18 +603,14 @@ async def test_blocked_stylesheet_reloads_and_recovers() -> None:
     reloaded_nav = _nav(reloads=1)
     reload = AsyncMock(return_value=reloaded_nav)
     prepare_page = AsyncMock(wraps=prepare.prepare_page)
-    report_status = AsyncMock()
+    report_status = Mock(return_value=None)
 
     with (
         patch("app.screenshots.capture.readiness.finalize", finalize),
         patch("app.screenshots.capture.readiness.retry_in_place", _retry_in_place()),
         patch("app.screenshots.capture.navigation.reload", reload),
         patch("app.screenshots.capture.prepare.prepare_page", prepare_page),
-        patch(
-            "app.screenshots.capture.navigation.report_status",
-            report_status,
-            create=True,
-        ),
+        patch("app.screenshots.capture.navigation.report_status", report_status),
     ):
         outcome = await _run(page)
 
@@ -565,10 +632,11 @@ async def test_blocked_stylesheet_reloads_and_recovers() -> None:
         0,
         1,
     )
-    assert "reload" in report.timings_ms
+    # The reloaded page is prepared and checked again within the same phases.
+    assert {"prepare", "readiness", "recovery"} <= set(report.timings_ms)
     # The status is reported once, for the reloaded page.
-    report_status.assert_awaited_once()
-    assert report_status.await_args.args[0].nav is reloaded_nav
+    report_status.assert_called_once()
+    assert report_status.call_args.args[0].nav is reloaded_nav
 
 
 async def test_stylesheet_still_broken_after_the_reload_is_reported() -> None:
@@ -637,10 +705,13 @@ async def test_unavailable_reload_keeps_the_current_page() -> None:
     img = AssetIssue(kind="img", url=IMG, category="blocked", status=403)
     page = SequencePage(b"current")
     nav = _nav()
-    report_status = AsyncMock()
+    report_status = Mock(return_value=None)
 
-    # navigation.reload is still the NotImplementedError stub here.
     with (
+        patch(
+            "app.screenshots.capture.navigation.reload",
+            AsyncMock(side_effect=NotImplementedError),
+        ),
         patch(
             "app.screenshots.capture.navigation.navigate", AsyncMock(return_value=nav)
         ),
@@ -649,11 +720,7 @@ async def test_unavailable_reload_keeps_the_current_page() -> None:
             _finalize(ReadinessResult(issues=(img,))),
         ),
         patch("app.screenshots.capture.readiness.retry_in_place", _retry_in_place()),
-        patch(
-            "app.screenshots.capture.navigation.report_status",
-            report_status,
-            create=True,
-        ),
+        patch("app.screenshots.capture.navigation.report_status", report_status),
     ):
         outcome = await _run(page)
 
@@ -667,13 +734,13 @@ async def test_unavailable_reload_keeps_the_current_page() -> None:
     )
     assert skipped.details["reason"] == "assets_blocked"
     assert outcome.report.warning("assets_missing") is not None
-    assert report_status.await_args.args[0].nav is nav
+    assert report_status.call_args.args[0].nav is nav
 
 
 async def test_blank_page_after_the_reload_falls_back() -> None:
     css = AssetIssue(kind="stylesheet", url=CSS, category="blocked")
     original_nav = _nav()
-    report_status = AsyncMock()
+    report_status = Mock(return_value=None)
 
     with (
         patch(
@@ -689,11 +756,7 @@ async def test_blank_page_after_the_reload_falls_back() -> None:
             "app.screenshots.capture.navigation.reload",
             AsyncMock(return_value=_nav(reloads=1)),
         ),
-        patch(
-            "app.screenshots.capture.navigation.report_status",
-            report_status,
-            create=True,
-        ),
+        patch("app.screenshots.capture.navigation.report_status", report_status),
     ):
         outcome = await _run(SequencePage(b"before", b"after"))
 
@@ -702,7 +765,7 @@ async def test_blank_page_after_the_reload_falls_back() -> None:
     assert skipped is not None and skipped.details["outcome"] == "blank"
     assert outcome.report.warning("styles_missing") is not None
     # The status reported is the one of the page in the image.
-    assert report_status.await_args.args[0].nav is original_nav
+    assert report_status.call_args.args[0].nav is original_nav
 
 
 async def test_reload_that_runs_out_of_budget_falls_back() -> None:
@@ -710,6 +773,7 @@ async def test_reload_that_runs_out_of_budget_falls_back() -> None:
 
     with (
         patch("app.screenshots.capture.config.RELOAD_RESERVE_S", 29.9),
+        patch("app.screenshots.capture.config.CLOSE_TIMEOUT_S", 0.05),
         patch(
             "app.screenshots.capture.readiness.finalize",
             _finalize(ReadinessResult(issues=(css,))),
@@ -812,14 +876,12 @@ async def test_pending_images_are_left_to_assets_pending() -> None:
 
 
 async def test_report_status_runs_once_after_recovery() -> None:
-    report_status = AsyncMock()
+    report_status = Mock(return_value=None)
 
-    with patch(
-        "app.screenshots.capture.navigation.report_status", report_status, create=True
-    ):
+    with patch("app.screenshots.capture.navigation.report_status", report_status):
         await _run(FakePage())
 
-    report_status.assert_awaited_once()
+    report_status.assert_called_once()
 
 
 async def test_overflow_is_cropped_end_to_end() -> None:
@@ -1125,7 +1187,7 @@ async def test_capture_with_retries_without_a_provider_retries_on_the_same_brows
 
 async def test_capture_with_retries_caps_the_budget_by_the_deadline() -> None:
     attempt = AsyncMock(return_value=_outcome())
-    deadline_at = asyncio.get_running_loop().time() + 100
+    deadline_at = clock.now() + 100
 
     await _retries(attempt, deadline_at=deadline_at)
 
@@ -1136,7 +1198,7 @@ async def test_capture_with_retries_needs_a_minute_for_a_retry() -> None:
     attempt = AsyncMock(
         side_effect=AttemptFailed(ScreenshotTimeoutError("slow"), CaptureReport())
     )
-    deadline_at = asyncio.get_running_loop().time() + 61  # 59 s after the pause
+    deadline_at = clock.now() + 61  # 59 s after the pause
 
     result = await _retries(attempt, deadline_at=deadline_at)
 
@@ -1151,7 +1213,7 @@ async def test_capture_with_retries_retries_with_a_minute_left() -> None:
             _outcome(),
         ]
     )
-    deadline_at = asyncio.get_running_loop().time() + 200
+    deadline_at = clock.now() + 200
 
     result = await _retries(attempt, deadline_at=deadline_at)
 
@@ -1163,7 +1225,7 @@ async def test_capture_with_retries_retries_with_a_minute_left() -> None:
 async def test_capture_with_retries_past_the_deadline_runs_nothing() -> None:
     attempt = AsyncMock(return_value=_outcome())
 
-    result = await _retries(attempt, deadline_at=asyncio.get_running_loop().time() - 1)
+    result = await _retries(attempt, deadline_at=clock.now() - 1)
 
     attempt.assert_not_awaited()
     assert isinstance(result.error, CaptureDeadlineExceeded)
@@ -1195,6 +1257,7 @@ async def test_capture_with_retries_deadline_end_to_end() -> None:
     browser = FakeBrowser(page)
 
     with (
+        patch("app.screenshots.capture.config.CLOSE_TIMEOUT_S", 0.05),
         patch("app.screenshots.capture.config.ATTEMPT_BUDGET_MIN_S", 0.05),
         patch("app.screenshots.capture.config.ATTEMPT_BUDGET_MAX_S", 0.05),
         patch(

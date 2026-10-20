@@ -8,15 +8,13 @@ capture_with_retries runs the attempts under the retry policy.
 
 import asyncio
 import dataclasses
-import inspect
 import logging
 import math
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from playwright.async_api import Browser, BrowserContext, Page
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import Browser, BrowserContext
 
 from app.screenshots.capture import (
     clock,
@@ -48,6 +46,7 @@ from app.screenshots.capture.types import (
     CaptureResult,
     CaptureRun,
     Deadline,
+    NavigationResult,
     ReadinessResult,
     SnapshotResult,
 )
@@ -154,6 +153,55 @@ async def _close_quietly(target: Any, what: str) -> None:
         logger.debug("closing the capture %s failed: %s", what, exc)
 
 
+def _consume(task: "asyncio.Future[Any]") -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+class _Expired(Exception):  # noqa: N818 — internal signal, never escapes
+    """A bounded step ran out of its time."""
+
+
+async def _settle(task: "asyncio.Future[Any]", timeout_s: float) -> None:
+    """Let an abandoned *task* finish (its outcome is consumed), cancelling it
+    after *timeout_s*."""
+    if not task.done():
+        await asyncio.wait({task}, timeout=timeout_s)
+    if not task.done():
+        task.cancel()
+        await asyncio.wait({task}, timeout=timeout_s)
+
+
+async def _within(
+    step: Coroutine[Any, Any, Any],
+    timeout_s: float | None,
+    stop: Callable[[], Awaitable[None]],
+) -> Any:
+    """Run *step* as its own task for at most *timeout_s* (None: unbounded).
+
+    Past the bound — and when the caller is cancelled — the step is not
+    cancelled mid-call: *stop* closes the page/context under it first, so
+    every pending Playwright call fails and is retrieved by the step itself
+    (cancelling a task inside a Playwright call leaves the call's protocol
+    future to fail unobserved once the page closes: "Future exception was
+    never retrieved"); only a step that still does not finish is cancelled.
+    Raises _Expired past the bound, else returns or raises like *step*.
+    """
+    task = asyncio.ensure_future(step)
+    task.add_done_callback(_consume)
+    try:
+        await asyncio.wait({task}, timeout=timeout_s)
+    except asyncio.CancelledError:
+        await stop()
+        await _settle(task, cfg.CANCEL_SETTLE_S)
+        raise
+    if task.done():
+        return task.result()
+    await stop()
+    await _settle(task, cfg.CLOSE_TIMEOUT_S)
+    raise _Expired
+
+
 # ---------------------------------------------------------------------------
 # One attempt
 # ---------------------------------------------------------------------------
@@ -213,52 +261,72 @@ async def run_attempt(
     report.meta["device"] = profile.meta()
     report.meta["browser_version"] = browser_version(browser)
     deadline = Deadline.start(budget_s)
-    expiry = asyncio.timeout(budget_s if math.isfinite(budget_s) else None)
     own_context = context is None
-    page: Page | None = None
-    try:
-        async with expiry:
-            with report.phase("total"):
-                if context is None:
-                    with report.phase("context"):
-                        context = await profiles.open_capture_context(
-                            browser, viewport, profile
-                        )
-                page = await context.new_page()
-                if not own_context:
-                    await page.set_viewport_size(
-                        {"width": viewport["width"], "height": viewport["height"]}
+    opened: dict[str, Any] = {"context": context, "page": None}
+    closed: set[int] = set()
+
+    async def close() -> None:
+        target = opened["context"] if own_context else opened["page"]
+        if target is not None and id(target) not in closed:
+            closed.add(id(target))
+            await _close_quietly(target, "context" if own_context else "page")
+
+    async def body() -> CaptureOutcome:
+        with report.phase("total"):
+            if opened["context"] is None:
+                with report.phase("context"):
+                    opened["context"] = await profiles.open_capture_context(
+                        browser, viewport, profile
                     )
-                await profiles.prepare_page_identity(page, profile)
-                net = network.NetworkDiagnostics()
-                net.attach(page)
-                tracker = network.InflightTracker()
-                tracker.attach(page)
-                run = CaptureRun(
-                    url=url,
-                    viewport={"width": viewport["width"], "height": viewport["height"]},
-                    config=config,
-                    profile=profile,
-                    page=page,
-                    tracker=tracker,
-                    net=net,
-                    report=report,
-                    deadline=deadline,
-                    attempt=attempt,
+            page = await opened["context"].new_page()
+            opened["page"] = page
+            if not own_context:
+                await page.set_viewport_size(
+                    {"width": viewport["width"], "height": viewport["height"]}
                 )
-                return await _capture(run)
+            await profiles.prepare_page_identity(page, profile)
+            net = network.NetworkDiagnostics()
+            net.attach(page)
+            tracker = network.InflightTracker()
+            tracker.attach(page)
+            run = CaptureRun(
+                url=url,
+                viewport={"width": viewport["width"], "height": viewport["height"]},
+                config=config,
+                profile=profile,
+                page=page,
+                tracker=tracker,
+                net=net,
+                report=report,
+                deadline=deadline,
+                attempt=attempt,
+            )
+            return await _capture(run)
+
+    phase_at_expiry: list[str | None] = []
+
+    async def stop() -> None:
+        phase_at_expiry.append(report.current_phase)
+        await close()
+
+    try:
+        return await _within(
+            body(), budget_s if math.isfinite(budget_s) else None, stop
+        )
+    except _Expired as exc:
+        phase = phase_at_expiry[0] if phase_at_expiry else report.current_phase
+        report.current_phase = phase
+        logger.warning(
+            "capture of %s ran out of its %.0f s budget (attempt=%d phase=%s)",
+            url,
+            budget_s,
+            attempt,
+            phase,
+        )
+        raise AttemptFailed(CaptureDeadlineExceeded(phase=phase), report) from exc
     except Exception as exc:
         error: BaseException = exc
-        if expiry.expired():
-            error = CaptureDeadlineExceeded(phase=report.current_phase)
-            logger.warning(
-                "capture of %s ran out of its %.0f s budget (attempt=%d phase=%s)",
-                url,
-                budget_s,
-                attempt,
-                report.current_phase,
-            )
-        elif isinstance(exc, TimeoutError):
+        if isinstance(exc, TimeoutError):
             # A stage let a bare asyncio timeout escape; keep it away from the
             # re-capture job's own `except TimeoutError`.
             error = EvaluateTimeout(
@@ -266,21 +334,13 @@ async def run_attempt(
             )
         raise AttemptFailed(error, report) from exc
     finally:
-        if own_context:
-            await _close_quietly(context, "context")
-        else:
-            await _close_quietly(page, "page")
+        await close()
 
 
 async def _capture(run: CaptureRun) -> CaptureOutcome:
     report = run.report
     t_start = clock.now()  # start: right before navigation
-    try:
-        run.nav = await navigation.navigate(run)
-    except PlaywrightTimeoutError as exc:
-        # The goto itself timed out on its lightest wait: the page is
-        # unreachable, which another attempt will not change.
-        raise NavigationTimeoutError(str(exc)) from exc
+    run.nav = await navigation.navigate(run)
 
     with report.phase("prepare"):
         run.prep = await prepare.prepare_page(run)
@@ -302,7 +362,8 @@ async def _capture(run: CaptureRun) -> CaptureOutcome:
         report.warn(
             "dom_unstable", warning_message, reason=state.verdict.unstable_reason
         )
-    await _report_status(run)
+    # Main-document status / redirect warnings for the page in the image.
+    navigation.report_status(run)
     _report_assets(run, state)
 
     shot = state.fallback
@@ -411,13 +472,15 @@ def _resolved(
     return [issue for issue in before if _issue_key(issue) not in still]
 
 
-def reload_reason(issues: Iterable[AssetIssue], nav: object) -> str | None:
+def reload_reason(
+    issues: Iterable[AssetIssue], nav: NavigationResult | None
+) -> str | None:
     """Why reloading the page could help, or None: the main document asked
     for it (5xx/429, ``nav.needs_reload``), a stylesheet is still broken for
     another reason than a plain 404/410, or an image is blocked/unreachable.
     Plain missing (404/410) assets never warrant a reload."""
     issues = tuple(issues)
-    if getattr(nav, "needs_reload", False):
+    if nav is not None and nav.needs_reload:
         return "http_status"
     if any(i.kind == "stylesheet" and i.category != "missing" for i in issues):
         return "styles_missing"
@@ -476,20 +539,31 @@ async def _reload(run: CaptureRun, state: _Recovery, reason: str) -> None:
         )
     nav, prep = run.nav, run.prep
     remaining_s = run.deadline.remaining_s()
-    limit_s = remaining_s - cfg.RELOAD_RESERVE_S if math.isfinite(remaining_s) else None
-    expiry = asyncio.timeout(limit_s)
+    limit_s = (
+        max(remaining_s - cfg.RELOAD_RESERVE_S, 0.0)
+        if math.isfinite(remaining_s)
+        else None
+    )
+
+    async def close_page() -> None:
+        # The image is in hand; the page is only needed for the reload.
+        await _close_quietly(run.page, "page")
+
     outcome: str
     error: str | None = None
     try:
-        async with expiry:
-            with report.phase("reload"):
-                verdict, issues = await _reload_and_check(run, reason)
+        verdict, issues = await _within(
+            _reload_and_check(run, reason), limit_s, close_page
+        )
+    except _Expired:
+        outcome = "budget"
+        logger.warning("recovery reload of %s ran out of time", run.url)
     except NotImplementedError:
         outcome = "unavailable"
     except Exception as exc:
-        outcome = "budget" if expiry.expired() else "failed"
-        error = f"{type(exc).__name__}: {exc}" if outcome == "failed" else None
-        logger.warning("recovery reload of %s failed (%s): %s", run.url, outcome, exc)
+        outcome = "failed"
+        error = f"{type(exc).__name__}: {exc}"
+        logger.warning("recovery reload of %s failed: %s", run.url, exc)
     else:
         if not verdict.blank:
             resolved = _resolved(state.issues, issues)
@@ -525,14 +599,20 @@ async def _reload(run: CaptureRun, state: _Recovery, reason: str) -> None:
 async def _reload_and_check(
     run: CaptureRun, reason: str
 ) -> tuple[ReadinessResult, tuple[AssetIssue, ...]]:
+    """navigation.reload (timed by it as "reload"), then prepare, readiness
+    and one more in-place retry, timed like the first pass."""
+    report = run.report
     run.nav = await navigation.reload(run, reason=reason)
-    run.prep = await prepare.prepare_page(run)
-    verdict = await _verdict(
-        run, cfg.stabilization_timeout_ms(run.config, retry=run.attempt > 0)
-    )
+    with report.phase("prepare"):
+        run.prep = await prepare.prepare_page(run)
+    with report.phase("readiness"):
+        verdict = await _verdict(
+            run, cfg.stabilization_timeout_ms(run.config, retry=run.attempt > 0)
+        )
     issues = tuple(verdict.issues)
     if issues and not verdict.blank:
-        issues = tuple(await readiness.retry_in_place(run, issues))
+        with report.phase("recovery"):
+            issues = tuple(await readiness.retry_in_place(run, issues))
     return verdict, issues
 
 
@@ -551,17 +631,6 @@ def _adopt(report: CaptureReport, other: CaptureReport) -> None:
 # ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
-
-
-async def _report_status(run: CaptureRun) -> None:
-    """navigation.report_status (main-document status / redirect warnings),
-    once the page the image shows is settled."""
-    report_status = getattr(navigation, "report_status", None)
-    if report_status is None:
-        return
-    result = report_status(run)
-    if inspect.isawaitable(result):
-        await result
 
 
 def _issue_reason(issue: AssetIssue) -> str:
@@ -665,7 +734,8 @@ async def capture_with_retries(
     (and BrowserUnavailableError); everything else is — BlankPageError,
     ScreenshotTimeoutError, EvaluateTimeout, CaptureDeadlineExceeded,
     Playwright errors. Each attempt gets attempt_budget_s(config), never past
-    *deadline_at* (an ``asyncio`` loop time); with *deadline_at* a retry only
+    *deadline_at* (a ``clock.now()`` time — the monotonic clock, as the event
+    loop's time); with *deadline_at* a retry only
     starts with config.RETRY_MIN_REMAINING_S left.
 
     Before a retry — and before the first attempt when the browser is no
@@ -688,7 +758,6 @@ async def capture_with_retries(
         )
     width = viewport["width"]
     height = viewport["height"]
-    loop = asyncio.get_running_loop()
     last_error: BaseException | None = None
     failed_outside_attempt = False
     outcome: CaptureOutcome | None = None
@@ -709,7 +778,7 @@ async def capture_with_retries(
                 )
                 break
             if deadline_at is not None:
-                left_s = deadline_at - loop.time() - cfg.RETRY_DELAY_S
+                left_s = deadline_at - clock.now() - cfg.RETRY_DELAY_S
                 if left_s < cfg.RETRY_MIN_REMAINING_S:
                     logger.warning(
                         "task=%s url=%s viewport=%dx%d — no retry, only %.0f s "
@@ -752,7 +821,7 @@ async def capture_with_retries(
 
         budget_s = attempt_budget_s(config)
         if deadline_at is not None:
-            budget_s = min(budget_s, deadline_at - loop.time())
+            budget_s = min(budget_s, deadline_at - clock.now())
             if budget_s <= 0:
                 last_error = CaptureDeadlineExceeded(
                     message="Capture deadline passed before the attempt started"
