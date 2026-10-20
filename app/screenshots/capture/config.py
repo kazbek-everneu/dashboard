@@ -191,3 +191,46 @@ INFINITE_SCROLL_GROWTH_RATIO = 0.5
 INFINITE_SCROLL_MAX_HEIGHT_PX = 98_301
 # Hidden-overlay records kept in capture_meta["overlays"]["samples"].
 OVERLAY_SAMPLES = 10
+
+
+# --- B4: readiness ---
+
+# readiness.finalize waits for the fonts at most FONTS_WAIT_CAP_MS (above); a
+# timeout is only the fonts_timeout warning, naming at most this many
+# families.
+FONTS_TIMEOUT_MAX_FAMILIES = 10
+# Broken / still loading visible assets (img, CSS background) one verdict
+# turns into AssetIssues; same cap for stylesheet and font issues.
+MAX_ASSET_ISSUES = 20
+# Bound of every readiness page script that does not bound itself.
+READINESS_SCRIPT_TIMEOUT_MS = 15_000
+# Fast path of wait_for_dom_stability: stable at once when the page is ready,
+# the in-page activity tracker has seen no DOM mutation / root resize for this
+# long and nothing tracked is in flight. It only ends the wait earlier — the
+# three-equal-samples rule stays the only way to an "unstable" verdict.
+FAST_PATH_QUIET_MS = 1500
+# readiness.retry_in_place: wait for the re-requested assets and the in-flight
+# requests at most RETRY_WAIT_MS (polling every RETRY_POLL_MS), but only
+# RETRY_IDLE_MS while elements still wait with nothing on the wire (the engine
+# did not fetch again); then re-check with a RETRY_DECODE_MS decode.
+RETRY_WAIT_MS = 5000
+RETRY_POLL_MS = 200
+RETRY_IDLE_MS = 1000
+RETRY_DECODE_MS = 2500
+# requestfailed texts (Chromium, Firefox, WebKit) that make a broken asset a
+# "network" issue; case-insensitive substrings.
+NETWORK_FAILURE_MARKERS = (
+    "ERR_CONNECTION_",
+    "ERR_TIMED_OUT",
+    "ERR_NETWORK_",
+    "ERR_INTERNET_DISCONNECTED",
+    "ERR_EMPTY_RESPONSE",
+    "ERR_HTTP2_",
+    "ERR_QUIC_",
+    "NS_ERROR_NET_",
+    "NS_ERROR_CONNECTION_REFUSED",
+    "Could not connect",
+    "Connection terminated",
+    "network connection was lost",
+    "timed out",
+)
