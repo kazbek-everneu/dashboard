@@ -377,9 +377,11 @@ JS_COLLECT_STABILITY_STATE = """() => { /*qa:stability-state*/
         }
     };
 
+    // Only images still loading: a broken one (complete, naturalWidth 0) will
+    // never settle, and finalize's decode check reports it as an issue.
     const pendingImages = Array.from(document.images).filter((img) => {
         const src = img.currentSrc || img.src;
-        return src && (!img.complete || img.naturalWidth === 0);
+        return src && !img.complete;
     });
     const pendingVisibleImages = pendingImages.filter(visible).length;
     const hiddenPendingImages = pendingImages.length - pendingVisibleImages;

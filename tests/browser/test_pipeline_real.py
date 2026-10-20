@@ -173,18 +173,14 @@ async def test_missing_image_keeps_the_screenshot(engine, browsers, site) -> Non
     assert site.hits["/"] == 1
 
 
-# TODO(integration): readiness's /*qa:stability-state*/ counts a broken image
-# (complete, naturalWidth 0) as pending, so a page with a visible 404 image
-# waits out the whole readiness window and the second chance and is captured
-# as dom_unstable. Drop the marker once it only counts images still loading.
-@pytest.mark.xfail(
-    reason="readiness counts broken images as pending (B4)", strict=False
-)
-async def test_missing_image_does_not_hold_up_readiness(browsers, site) -> None:
+@pytest.mark.parametrize("engine", ENGINES)
+async def test_missing_image_does_not_hold_up_readiness(engine, browsers, site) -> None:
     url = site.add("/", MISSING_IMAGE_PAGE)
-    browser = await browsers("chrome")
+    browser = await browsers(engine)
 
-    result = await capture(browser, url, viewport=(1280, 800), timeout=5000)
+    result = await capture(
+        browser, url, browser_name=engine, viewport=(1280, 800), timeout=5000
+    )
 
     assert result.ok, result.error
     assert result.outcome.captured_with_unstable_dom is False
