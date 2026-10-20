@@ -175,6 +175,14 @@ class SnapshotResult:
     document_height: int = 0
     clip_width: int | None = None
     retried: bool = False
+    # B5: the layout viewport width the page reported (window.innerWidth),
+    # whether its horizontal overflow is hidden (overflow-x hidden|clip on
+    # html/body), whether it is right-to-left, and the page.screenshot timeout
+    # used (ms). 0 / False when the page metrics were not available.
+    layout_width: int = 0
+    overflow_hidden: bool = False
+    rtl: bool = False
+    timeout_ms: int = 0
 
 
 @dataclass
@@ -187,6 +195,8 @@ class CaptureOutcome:
     captured_with_unstable_dom: bool = False
     # Kept for compatibility: the text ok rows store in error_message.
     warning_message: str | None = None
+    # B5: the snapshot the image comes from (document size, crop, retry).
+    snapshot: SnapshotResult | None = None
 
 
 @dataclass
