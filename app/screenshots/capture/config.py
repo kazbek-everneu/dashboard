@@ -116,3 +116,31 @@ def stabilization_timeout_ms(config: EffectiveConfig, retry: bool = False) -> in
     if retry:
         return min(int(base * RETRY_SETTLE_MULTIPLIER), MAX_RETRY_SETTLE_TIMEOUT_MS)
     return base
+
+
+# --- B2: navigation & network ---
+
+# Navigation is one goto that waits for DOMContentLoaded; the load event is
+# then awaited separately and non-fatally, up to this cap (and the project
+# timeout). A page whose load event never fires is captured anyway — readiness
+# then accepts document.readyState "interactive".
+LOAD_WAIT_CAP_MS = 30_000
+# Post-goto quiet of wait_until="networkidle" projects, replacing Playwright's
+# networkidle (which analytics beacons and long-polling keep from ever firing).
+NETWORKIDLE_QUIET_MS = 1000
+NETWORKIDLE_QUIET_CAP_MS = 15_000
+# Bound of every navigation page script (jsutil.evaluate), and of the wait for
+# a new document's DOMContentLoaded before a page check is retried after a
+# navigation replaced the document under it.
+NAVIGATION_SCRIPT_TIMEOUT_MS = 15_000
+NAVIGATION_RECHECK_WAIT_MS = 5000
+# Protection pages (WAF / bot challenge): how long a detected one may take to
+# pass, and the polling interval while it does.
+CHALLENGE_WAIT_MS = 15_000
+CHALLENGE_POLL_MS = 500
+# Page markers of a protection page only count on a page this small (element
+# count): such pages are tiny, so a long article that merely mentions
+# "Access Denied" or a vendor name is never mistaken for one.
+CHALLENGE_PAGE_MAX_ELEMENTS = 400
+# Bound of NetworkDiagnostics' per-URL resource registry.
+MAX_RESOURCE_RECORDS = 2000
