@@ -17,6 +17,8 @@ services:
     build:
       context: .
     command: python -m arq app.worker.main.WorkerSettings
+    # On SIGTERM a running capture records its final status before exiting.
+    stop_grace_period: 30s
     env_file:
       - .env
     depends_on:

@@ -1,16 +1,19 @@
 import asyncio
+import contextlib
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
+from arq.jobs import Job, JobStatus
 from playwright.async_api import async_playwright
-from sqlmodel import select
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth.models import User  # noqa: F401 — required for SQLAlchemy FK resolution
 from app.core.config import settings
-from app.core.time import utcnow
+from app.core.time import as_utc, utcnow
 from app.projects.models import (
     ProjectConfig,
     ViewportEntry,
@@ -25,6 +28,13 @@ from app.screenshots.service import (
 )
 from app.screenshots.storage import build_file_path, generate_signed_url
 from app.settings.service import get_application_settings, resolve_setting
+from app.tasks.lifecycle import (
+    ACTIVE_TASK_STATUSES,
+    HEARTBEAT_INTERVAL_SECONDS,
+    PENDING_GRACE,
+    task_is_alive,
+    worker_job_id_for,
+)
 from app.tasks.limiter import CaptureLimiter
 from app.tasks.models import Task
 from app.tasks.service import _clear_user_cancel_marker, is_user_cancel_requested
@@ -188,53 +198,58 @@ async def _close_quietly(context: Any | None) -> None:
         logger.debug("browser context close failed: %s", exc)
 
 
-async def run_screenshot_task(ctx: dict, task_id: str) -> None:
-    """ARQ job: run all screenshots for a task concurrently.
+async def finish_task(
+    engine: Any, task_id: uuid.UUID, status: str, **fields: object
+) -> str | None:
+    """Give a task its terminal *status* unless it already has one.
 
-    Steps:
-    1. Load Task + ProjectConfig; mark task as "running".
-    2. Build flat (url x viewport x browser) combination list.
-    3. Launch Playwright browser(s).
-    4. Run the combinations through a consumer pool; every capture holds a slot
-       of the worker-wide CaptureLimiter, so concurrent tasks share SEM_LIMIT.
-    5. Write progress to DB after each screenshot.
-    6. Set final task status and completed_at.
+    The row is locked so a concurrent cancel cannot interleave; a status set
+    elsewhere first (e.g. ``cancelled`` by the user) is kept. *fields* (the
+    progress counters) and ``completed_at`` are written either way. Returns
+    the task's resulting status, or None when the task no longer exists.
     """
-    engine = ctx["db_engine"]
-    tid = uuid.UUID(task_id)
-    job_started_monotonic = time.monotonic()
+    async with AsyncSession(engine) as session:
+        task = await session.get(Task, task_id, with_for_update=True)
+        if task is None:
+            return None
+        if task.status in ACTIVE_TASK_STATUSES:
+            task.status = status
+        for name, value in fields.items():
+            setattr(task, name, value)
+        if task.completed_at is None:
+            task.completed_at = utcnow()
+        final_status = task.status  # read before commit expires the attributes
+        session.add(task)
+        await session.commit()
+        return final_status
 
-    # ------------------------------------------------------------------
-    # Load Task + ProjectConfig, then immediately mark as running.
-    # Capture all needed scalar values before the session closes to
-    # avoid DetachedInstanceError on expired SQLAlchemy attributes.
-    # ------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _RunPlan:
+    project_id: uuid.UUID
+    effective: EffectiveConfig
+    combos: list[tuple[str, dict, str]]
+    sem_limit: int
+    job_timeout_seconds: int
+    reuse_context: bool
+
+
+async def _load_run_plan(engine: Any, tid: uuid.UUID) -> _RunPlan:
+    """Load what a run needs and build its (url, viewport, browser) combos.
+
+    Every value is read while the session is open, so nothing expires later.
+    Raises when the task or its ProjectConfig no longer exists.
+    """
     async with AsyncSession(engine) as session:
         task = await session.get(Task, tid)
         if not task:
-            logger.error("run_screenshot_task: task_id=%s not found", task_id)
-            return
-        if task.status == "cancelled":
-            if task.completed_at is None:
-                task.completed_at = utcnow()
-                session.add(task)
-                await session.commit()
-            logger.info("run_screenshot_task: task_id=%s already cancelled", task_id)
-            return
-
+            raise RuntimeError("task no longer exists")
         config_result = await session.execute(
             select(ProjectConfig).where(ProjectConfig.project_id == task.project_id)
         )
         config = config_result.scalars().first()
         if not config:
-            logger.error(
-                "run_screenshot_task: ProjectConfig missing for project=%s task=%s",
-                task.project_id, task_id,
-            )
-            task.status = "failed"
-            session.add(task)
-            await session.commit()
-            return
+            raise RuntimeError(f"ProjectConfig missing for project={task.project_id}")
 
         app_settings = await get_application_settings(session)
         effective = _build_effective_config(
@@ -243,13 +258,6 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
             app_settings.screenshot_format,
             app_settings.screenshot_quality,
         )
-        # Effective tuning values (DB override > .env). Resolved while the session
-        # is open and kept as plain ints for use after it closes / in closures.
-        sem_limit = max(int(resolve_setting(app_settings, "sem_limit")), 1)
-        job_timeout_seconds = max(
-            int(resolve_setting(app_settings, "task_job_timeout_seconds")), 0
-        )
-        reuse_context = bool(resolve_setting(app_settings, "reuse_browser_context"))
         viewports: list[dict] = task.override_viewports or config.viewports
 
         # Build the flat (url, viewport, browser) combination list.
@@ -276,33 +284,70 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                 for browser_name in browsers_to_use:
                     combos.append((url, vp, browser_name))
 
-        # Capture scalars we need in closures after this session closes
-        project_id = task.project_id
-        total = len(combos)
+        # Effective tuning values (DB override > .env), kept as plain values.
+        return _RunPlan(
+            project_id=task.project_id,
+            effective=effective,
+            combos=combos,
+            sem_limit=max(int(resolve_setting(app_settings, "sem_limit")), 1),
+            job_timeout_seconds=max(
+                int(resolve_setting(app_settings, "task_job_timeout_seconds")), 0
+            ),
+            reuse_context=bool(resolve_setting(app_settings, "reuse_browser_context")),
+        )
 
+
+async def run_screenshot_task(ctx: dict, task_id: str) -> None:
+    """ARQ job: run all screenshots for a task concurrently.
+
+    Steps:
+    1. Claim the task (pending -> running). Any other status means a cancel,
+       the reaper or an earlier run got there first: nothing to do.
+    2. Load ProjectConfig + settings and build the flat
+       (url x viewport x browser) combination list.
+    3. Launch Playwright browser(s).
+    4. Run the combinations through a consumer pool; every capture holds a slot
+       of the worker-wide CaptureLimiter, so concurrent tasks share SEM_LIMIT.
+    5. Write progress to DB as it goes; beat ``heartbeat_at`` meanwhile.
+    6. Set final task status and completed_at.
+    """
+    engine = ctx["db_engine"]
+    tid = uuid.UUID(task_id)
+    job_started_monotonic = time.monotonic()
+
+    # ------------------------------------------------------------------
+    # Claim the task. The row lock makes a concurrent cancel wait: one that
+    # committed first is seen here, a later one by the progress polls.
+    # ------------------------------------------------------------------
+    async with AsyncSession(engine) as session:
+        task = await session.get(Task, tid, with_for_update=True)
+        if not task:
+            logger.error("run_screenshot_task: task_id=%s not found", task_id)
+            return
+        if task.status != "pending":
+            if task.status == "cancelled" and task.completed_at is None:
+                task.completed_at = utcnow()
+                session.add(task)
+                await session.commit()
+            logger.info(
+                "run_screenshot_task: task_id=%s is %s, not running it",
+                task_id, task.status,
+            )
+            return
+        claimed_at = utcnow()
         task.status = "running"
-        task.started_at = utcnow()
+        task.started_at = claimed_at
+        task.heartbeat_at = claimed_at
         session.add(task)
         await session.commit()
 
-    unique_browsers = {b for _, _, b in combos}
-    logger.info(
-        "task=%s starting: combinations=%d browsers=%s",
-        task_id, total, sorted(unique_browsers),
-    )
-
-    limiter = _capture_limiter(ctx, sem_limit)
-    # Queue items are (url, browser, [viewports]). With context reuse all
-    # viewports of one URL in one browser form a group that shares a browser
-    # context (and its HTTP cache); otherwise every combo is its own group.
-    if reuse_context:
-        work_items = _group_combos(combos)
-    else:
-        work_items = [(url, browser, [vp]) for url, vp, browser in combos]
-    worker_count = sem_limit
-    queue: asyncio.Queue[tuple[str, str, list[dict]] | None] = asyncio.Queue(
-        maxsize=max(sem_limit * 2, 1)
-    )
+    # Set from the run plan inside the main try below; the defaults keep the
+    # interrupt handlers working if loading the plan itself fails.
+    project_id: uuid.UUID | None = None
+    effective: EffectiveConfig | None = None
+    combos: list[tuple[str, dict, str]] = []
+    total = 0
+    job_timeout_seconds = 0
     progress_done = 0
     progress_failed = 0
     is_cancelled = False
@@ -347,16 +392,31 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                 logger.info("task=%s detected cancellation, stopping", task_id)
         return is_cancelled
 
+    async def _heartbeat() -> None:
+        nonlocal is_cancelled
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+            try:
+                async with AsyncSession(engine) as session:
+                    t = await session.get(Task, tid)
+                    if not t or t.status == "cancelled":
+                        is_cancelled = True
+                        logger.info("task=%s heartbeat saw cancellation", task_id)
+                        return
+                    t.heartbeat_at = utcnow()
+                    session.add(t)
+                    await session.commit()
+            except Exception as exc:
+                logger.warning("task=%s heartbeat failed: %s", task_id, exc)
+
     async def _mark_cancelled() -> None:
-        async with AsyncSession(engine) as session:
-            t = await session.get(Task, tid)
-            if t:
-                t.status = "cancelled"
-                t.progress_done = progress_done
-                t.progress_failed = progress_failed
-                t.completed_at = utcnow()
-                session.add(t)
-                await session.commit()
+        await finish_task(
+            engine,
+            tid,
+            "cancelled",
+            progress_done=progress_done,
+            progress_failed=progress_failed,
+        )
 
     def _combo_key(
         url: str,
@@ -390,21 +450,19 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
         except Exception as exc:
             logger.warning("task=%s cancel marker cleanup failed: %s", task_id, exc)
 
-    async def _mark_failed_after_interrupt() -> None:
-        async with AsyncSession(engine) as session:
-            t = await session.get(Task, tid)
-            if t:
-                t.status = "failed"
-                t.progress_done = progress_done
-                t.progress_failed = progress_failed
-                t.completed_at = utcnow()
-                session.add(t)
-                await session.commit()
+    async def _mark_failed() -> None:
+        await finish_task(
+            engine,
+            tid,
+            "failed",
+            progress_done=progress_done,
+            progress_failed=progress_failed,
+        )
 
     async def _mark_timed_out() -> None:
         nonlocal progress_done, progress_failed
         async with AsyncSession(engine) as session:
-            t = await session.get(Task, tid)
+            t = await session.get(Task, tid, with_for_update=True)
             if not t:
                 return
 
@@ -460,7 +518,8 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
             progress_done = sum(1 for s in screenshots if s.status == "ok")
             progress_failed = sum(1 for s in screenshots if s.status == "failed")
 
-            t.status = "timed_out"
+            if t.status in ACTIVE_TASK_STATUSES:
+                t.status = "timed_out"
             t.progress_total = progress_done + progress_failed
             t.progress_done = progress_done
             t.progress_failed = progress_failed
@@ -629,9 +688,38 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                 logger.warning("task=%s browser close failed: %s", task_id, exc)
 
     # ------------------------------------------------------------------
-    # Launch browser(s) and run all combinations
+    # Load the run plan, launch browser(s) and run all combinations
     # ------------------------------------------------------------------
+    heartbeat = asyncio.create_task(_heartbeat())
     try:
+        plan = await _load_run_plan(engine, tid)
+        project_id = plan.project_id
+        effective = plan.effective
+        combos = plan.combos
+        total = len(combos)
+        sem_limit = plan.sem_limit
+        job_timeout_seconds = plan.job_timeout_seconds
+        reuse_context = plan.reuse_context
+
+        unique_browsers = {b for _, _, b in combos}
+        logger.info(
+            "task=%s starting: combinations=%d browsers=%s",
+            task_id, total, sorted(unique_browsers),
+        )
+
+        limiter = _capture_limiter(ctx, sem_limit)
+        # Queue items are (url, browser, [viewports]). With context reuse all
+        # viewports of one URL in one browser form a group that shares a browser
+        # context (and its HTTP cache); otherwise every combo is its own group.
+        if reuse_context:
+            work_items = _group_combos(combos)
+        else:
+            work_items = [(url, browser, [vp]) for url, vp, browser in combos]
+        worker_count = sem_limit
+        queue: asyncio.Queue[tuple[str, str, list[dict]] | None] = asyncio.Queue(
+            maxsize=max(sem_limit * 2, 1)
+        )
+
         async with async_playwright() as pw:
             try:
                 # Launch one Playwright Browser instance per unique browser name.
@@ -644,13 +732,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                             "task=%s browser launch failed browser=%s: %s",
                             task_id, bn, exc,
                         )
-                        async with AsyncSession(engine) as session:
-                            t = await session.get(Task, tid)
-                            if t:
-                                t.status = "failed"
-                                t.completed_at = utcnow()
-                                session.add(t)
-                                await session.commit()
+                        await finish_task(engine, tid, "failed")
                         return
 
                 producer = asyncio.create_task(_producer())
@@ -679,41 +761,30 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
             await _mark_timed_out()
         else:
             logger.warning("task=%s interrupted before timeout", task_id)
-            await _mark_failed_after_interrupt()
+            await _mark_failed()
         raise
     except Exception as exc:
         logger.error(
             "task=%s unexpected error: %s", task_id, exc, exc_info=True
         )
-        async with AsyncSession(engine) as session:
-            t = await session.get(Task, tid)
-            if t:
-                t.status = "failed"
-                t.completed_at = utcnow()
-                session.add(t)
-                await session.commit()
+        await _mark_failed()
         return
+    finally:
+        heartbeat.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat
 
     # ------------------------------------------------------------------
-    # Finalise task status
+    # Finalise task status (an externally set "cancelled" is kept)
     # ------------------------------------------------------------------
-    final_status = "completed"
     await _persist_progress(force=True)
-    async with AsyncSession(engine) as session:
-        t = await session.get(Task, tid)
-        if t:
-            # Don't overwrite an externally set "cancelled" status
-            if t.status != "cancelled":
-                if progress_done == 0 and progress_failed > 0:
-                    t.status = "failed"
-                else:
-                    t.status = "completed"
-            final_status = t.status
-            t.progress_done = progress_done
-            t.progress_failed = progress_failed
-            t.completed_at = utcnow()
-            session.add(t)
-            await session.commit()
+    final_status = await finish_task(
+        engine,
+        tid,
+        "failed" if progress_done == 0 and progress_failed > 0 else "completed",
+        progress_done=progress_done,
+        progress_failed=progress_failed,
+    )
 
     logger.info(
         "task=%s %s: done=%d failed=%d total=%d",
@@ -777,6 +848,50 @@ async def reset_orphaned_recapturing(engine: Any) -> int:
 
     logger.info("reset %d orphaned recapturing screenshot(s) on startup", len(stuck))
     return len(stuck)
+
+
+async def _job_is_gone(redis: Any, task: Task) -> bool:
+    job_id = task.worker_job_id or worker_job_id_for(task.id)
+    status = await Job(job_id=job_id, redis=redis).status()
+    return status in (JobStatus.not_found, JobStatus.complete)
+
+
+async def reap_orphaned_tasks(engine: Any, redis: Any) -> int:
+    """Fail active tasks that no worker is running any more.
+
+    * ``running`` with no heartbeat for ``HEARTBEAT_STALE_AFTER``;
+    * ``pending`` for longer than ``PENDING_GRACE`` whose ARQ job no longer
+      exists or has already finished (a queued job is left alone).
+
+    ARQ keys are not touched: the job runs with ``max_tries=1`` and the start
+    guard in ``run_screenshot_task`` ignores non-pending tasks, so a stale job
+    can never re-run a reaped task. Returns the number of tasks failed.
+    """
+    now = utcnow()
+    async with AsyncSession(engine) as session:
+        result = await session.exec(
+            select(Task).where(col(Task.status).in_(ACTIVE_TASK_STATUSES))
+        )
+        orphaned: list[uuid.UUID] = []
+        for task in result.all():
+            if task.status == "running":
+                if task_is_alive(task, now):
+                    continue
+            elif now - as_utc(task.created_at) < PENDING_GRACE or not (
+                await _job_is_gone(redis, task)
+            ):
+                continue
+            orphaned.append(task.id)
+
+    for task_id in orphaned:
+        status = await finish_task(engine, task_id, "failed")
+        logger.warning("task=%s orphaned, marked %s", task_id, status)
+    return len(orphaned)
+
+
+async def reap_orphaned_tasks_job(ctx: dict) -> int:
+    """ARQ cron entry point for :func:`reap_orphaned_tasks`."""
+    return await reap_orphaned_tasks(ctx["db_engine"], ctx["redis"])
 
 
 async def recapture_screenshot(ctx: dict, screenshot_id: str) -> None:

@@ -1,12 +1,16 @@
 import logging
 from typing import ClassVar
 
+from arq.cron import cron
+from arq.worker import func
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import settings
 from app.core.redis import close_redis_pool, get_redis_settings
 from app.tasks.limiter import CaptureLimiter
 from app.tasks.worker import (
+    reap_orphaned_tasks,
+    reap_orphaned_tasks_job,
     recapture_screenshot,
     reset_orphaned_recapturing,
     run_screenshot_task,
@@ -33,6 +37,8 @@ async def startup(ctx: dict) -> None:
     # Recover any recapture left mid-flight by a previous crash/redeploy so its
     # row never stays stuck in "recapturing".
     await reset_orphaned_recapturing(ctx["db_engine"])
+    # Fail tasks a previous worker died on, so they stop blocking their project.
+    await reap_orphaned_tasks(ctx["db_engine"], ctx["redis"])
 
 
 async def shutdown(ctx: dict) -> None:
@@ -44,7 +50,21 @@ async def shutdown(ctx: dict) -> None:
 
 
 class WorkerSettings:
-    functions: ClassVar = [run_screenshot_task, recapture_screenshot]
+    # max_tries=1: ARQ re-queues a job its worker was killed or stopped on and
+    # would run the whole capture again (duplicate rows). The interrupted task
+    # is failed instead — by the job's own interrupt handling or by the reaper.
+    functions: ClassVar = [
+        func(run_screenshot_task, max_tries=1),
+        recapture_screenshot,
+    ]
+    cron_jobs: ClassVar = [
+        cron(
+            reap_orphaned_tasks_job,
+            minute=set(range(0, 60, 5)),
+            unique=True,
+            timeout=60,
+        )
+    ]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = get_redis_settings()

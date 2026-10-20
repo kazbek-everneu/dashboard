@@ -12,6 +12,7 @@ from app.core.time import utcnow
 from app.core.url_security import normalize_project_child_url
 from app.projects.models import ProjectConfig, SitemapURL
 from app.projects.service import get_project
+from app.tasks.lifecycle import ACTIVE_TASK_STATUSES, task_is_alive, worker_job_id_for
 from app.tasks.models import (
     Task,
     TaskCreate,
@@ -63,10 +64,6 @@ async def is_user_cancel_requested(task_id: uuid.UUID | str) -> bool:
 
     redis = await get_redis_pool()
     return await redis.get(_user_cancel_marker_key(task_id)) is not None
-
-
-def _build_worker_job_id(task_id: uuid.UUID) -> str:
-    return f"screenshot-task:{task_id}"
 
 
 async def _abort_worker_job(worker_job_id: str, *, failure_detail: str) -> None:
@@ -222,7 +219,7 @@ async def create_task(session: AsyncSession, data: TaskCreate, user: User) -> Ta
     # never stays permanently stuck as "pending".
     from app.core.redis import get_redis_pool
 
-    worker_job_id = _build_worker_job_id(task.id)
+    worker_job_id = worker_job_id_for(task.id)
     redis = await get_redis_pool()
     try:
         job = await redis.enqueue_job(
@@ -237,6 +234,7 @@ async def create_task(session: AsyncSession, data: TaskCreate, user: User) -> Ta
     except Exception as exc:
         logger.error("Failed to enqueue task id=%s: %s", task.id, exc)
         task.status = "failed"
+        task.completed_at = utcnow()
         session.add(task)
         await session.commit()
         if isinstance(exc, ConflictError):
@@ -280,10 +278,12 @@ async def cancel_task(
     if not task:
         raise NotFoundError("Task not found")
     await get_project(session, task.project_id, user)
-    if task.status not in ("pending", "running"):
+    if task.status not in ACTIVE_TASK_STATUSES:
         raise ConflictError(f"Cannot cancel a task with status '{task.status}'.")
     user_id = user.id  # capture before commit expires the session-bound user object
-    if task.worker_job_id:
+    # A running task whose worker died has nothing left to abort — waiting on
+    # its stale ARQ job would only time out — so it is cancelled directly.
+    if task.worker_job_id and (task.status == "pending" or task_is_alive(task)):
         await _set_user_cancel_marker(task.id)
         try:
             await _abort_worker_job(
@@ -293,8 +293,13 @@ async def cancel_task(
         except Exception:
             await _clear_user_cancel_marker(task.id)
             raise
-    task.status = "cancelled"
-    task.completed_at = utcnow()
+    # Re-read under a lock: the job may have finished, or been cancelled by
+    # the worker itself, while the abort was in flight. Keep that outcome.
+    await session.refresh(task, with_for_update=True)
+    if task.status in ACTIVE_TASK_STATUSES:
+        task.status = "cancelled"
+    if task.completed_at is None:
+        task.completed_at = utcnow()
     session.add(task)
     await session.commit()
     await session.refresh(task)
@@ -307,9 +312,11 @@ async def delete_task(session: AsyncSession, task_id: uuid.UUID, user: User) -> 
     if not task:
         raise NotFoundError("Task not found")
     await get_project(session, task.project_id, user)
-    if task.status in ("pending", "running"):
+    if task.status in ACTIVE_TASK_STATUSES:
         raise ConflictError("Cannot delete a running task. Cancel it first.")
-    if task.worker_job_id:
+    # A just-cancelled job may still be shutting down; one whose worker is gone
+    # (no recent heartbeat) has nothing left to abort.
+    if task.worker_job_id and task_is_alive(task):
         await _abort_worker_job(
             task.worker_job_id,
             failure_detail="Task is still stopping. Please try again.",

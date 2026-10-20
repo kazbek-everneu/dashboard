@@ -56,6 +56,9 @@ class Task(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
     started_at: datetime | None = Field(default=None, sa_type=UtcDateTime)
     completed_at: datetime | None = Field(default=None, sa_type=UtcDateTime)
+    # Beaten by the worker while it runs the task; app.tasks.lifecycle
+    # treats a running task without a recent beat as orphaned.
+    heartbeat_at: datetime | None = Field(default=None, sa_type=UtcDateTime)
 
 
 # ---------------------------------------------------------------------------

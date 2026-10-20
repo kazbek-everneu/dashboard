@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -10,15 +11,19 @@ from arq.jobs import JobStatus
 
 from app.auth.models import User
 from app.core.exceptions import ConflictError
+from app.core.time import utcnow
 from app.projects.models import Project, ProjectConfig
 from app.screenshots.models import Screenshot
 from app.screenshots.service import EffectiveConfig
+from app.tasks.lifecycle import HEARTBEAT_STALE_AFTER, task_is_alive
 from app.tasks.limiter import CaptureLimiter
 from app.tasks.models import Task, TaskCreate
 from app.tasks.service import _abort_worker_job, cancel_task, create_task, delete_task
 from app.tasks.worker import (
     _CHROMIUM_LAUNCH_ARGS,
     _launch_browser,
+    finish_task,
+    reap_orphaned_tasks,
     run_screenshot_task,
 )
 
@@ -44,7 +49,7 @@ class _FakeTaskSession:
     async def exec(self, _statement: object) -> _FakeResult:
         return _FakeResult([])
 
-    async def get(self, model: type[Task], key: object) -> Task | None:
+    async def get(self, model: type[Task], key: object, **_kwargs: object) -> Task | None:
         assert model is Task
         return next((task for task in self.tasks if task.id == key), None)
 
@@ -58,7 +63,7 @@ class _FakeTaskSession:
     async def rollback(self) -> None:
         return None
 
-    async def refresh(self, task: Task) -> None:
+    async def refresh(self, task: Task, **_kwargs: object) -> None:
         return None
 
     async def delete(self, task: Task) -> None:
@@ -162,7 +167,9 @@ async def test_create_task_saves_worker_job_id_and_enqueues_with_custom_id() -> 
 async def test_cancel_task_aborts_worker_job_before_marking_cancelled() -> None:
     user = _user()
     project = _project(user)
-    task = _task(project, user, status="running", worker_job_id="job-1")
+    task = _task(
+        project, user, status="running", worker_job_id="job-1", heartbeat_at=utcnow()
+    )
     session = _FakeTaskSession([task])
     abort_worker_job = AsyncMock()
     set_cancel_marker = AsyncMock()
@@ -204,7 +211,9 @@ async def test_cancel_task_keeps_legacy_db_cancel_fallback() -> None:
 async def test_cancel_task_does_not_mark_cancelled_when_abort_is_unconfirmed() -> None:
     user = _user()
     project = _project(user)
-    task = _task(project, user, status="running", worker_job_id="job-1")
+    task = _task(
+        project, user, status="running", worker_job_id="job-1", heartbeat_at=utcnow()
+    )
     session = _FakeTaskSession([task])
     clear_cancel_marker = AsyncMock()
 
@@ -227,7 +236,9 @@ async def test_cancel_task_does_not_mark_cancelled_when_abort_is_unconfirmed() -
 async def test_delete_task_aborts_leftover_worker_job_before_delete() -> None:
     user = _user()
     project = _project(user)
-    task = _task(project, user, status="cancelled", worker_job_id="job-1")
+    task = _task(
+        project, user, status="cancelled", worker_job_id="job-1", heartbeat_at=utcnow()
+    )
     session = _FakeTaskSession([task])
     abort_worker_job = AsyncMock()
 
@@ -247,7 +258,9 @@ async def test_delete_task_aborts_leftover_worker_job_before_delete() -> None:
 async def test_delete_task_blocks_when_leftover_worker_job_is_still_active() -> None:
     user = _user()
     project = _project(user)
-    task = _task(project, user, status="cancelled", worker_job_id="job-1")
+    task = _task(
+        project, user, status="cancelled", worker_job_id="job-1", heartbeat_at=utcnow()
+    )
     session = _FakeTaskSession([task])
 
     with (
@@ -342,7 +355,7 @@ class _FakeWorkerSession:
     async def __aexit__(self, *_args: object) -> None:
         return None
 
-    async def get(self, model: type[Task], key: object) -> Task | None:
+    async def get(self, model: type[Task], key: object, **_kwargs: object) -> Task | None:
         assert model is Task
         return self.task if self.task.id == key else None
 
@@ -1038,3 +1051,233 @@ async def test_worker_takes_a_shared_limiter_slot_per_capture() -> None:
     assert limiter.acquired == 4
     assert limiter.limit == 3  # resized to the task's effective sem_limit
     assert limiter.in_use == 0
+
+
+# ---------------------------------------------------------------------------
+# Orphaned tasks: start guard, heartbeat liveness, reaper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status", ["running", "failed", "completed", "timed_out"])
+async def test_worker_ignores_tasks_that_are_not_pending(status: str) -> None:
+    # A re-delivered or stale job must never run a task a second time.
+    user = _user()
+    project = _project(user)
+    task = _task(project, user, status=status)
+    config = _config(project.id)
+
+    with (
+        patch(
+            "app.tasks.worker.AsyncSession",
+            return_value=_FakeWorkerSession(task, config),
+        ),
+        patch("app.tasks.worker.async_playwright") as async_playwright,
+    ):
+        await run_screenshot_task({"db_engine": object()}, str(task.id))
+
+    async_playwright.assert_not_called()
+    assert task.status == status
+
+
+async def test_worker_fails_task_when_setup_fails() -> None:
+    user = _user()
+    project = _project(user)
+    task = _task(project, user, status="pending")
+    session = _FakeWorkerSession(task, None)  # type: ignore[arg-type]
+
+    with (
+        patch("app.tasks.worker.AsyncSession", return_value=session),
+        patch("app.tasks.worker.async_playwright") as async_playwright,
+    ):
+        await run_screenshot_task({"db_engine": object()}, str(task.id))
+
+    async_playwright.assert_not_called()
+    assert task.status == "failed"
+    assert task.started_at is not None
+    assert task.completed_at is not None
+
+
+async def test_finish_task_keeps_an_externally_set_cancel() -> None:
+    user = _user()
+    project = _project(user)
+    task = _task(project, user, status="cancelled")
+
+    with patch(
+        "app.tasks.worker.AsyncSession",
+        return_value=_FakeWorkerSession(task, _config(project.id)),
+    ):
+        status = await finish_task(object(), task.id, "completed", progress_done=3)
+
+    assert status == "cancelled"
+    assert task.progress_done == 3
+    assert task.completed_at is not None
+
+
+def test_task_is_alive_uses_heartbeat_then_start_time() -> None:
+    user = _user()
+    project = _project(user)
+    now = utcnow()
+
+    fresh = _task(project, user, status="running", heartbeat_at=now)
+    stale = _task(
+        project,
+        user,
+        status="running",
+        started_at=now - timedelta(hours=1),
+        heartbeat_at=now - HEARTBEAT_STALE_AFTER - timedelta(seconds=1),
+    )
+    just_started = _task(project, user, status="running", started_at=now)
+    never_started = _task(project, user, status="pending")
+
+    assert task_is_alive(fresh, now) is True
+    assert task_is_alive(stale, now) is False
+    assert task_is_alive(just_started, now) is True
+    assert task_is_alive(never_started, now) is False
+
+
+class _FakeReaperSession:
+    def __init__(self, tasks: list[Task]) -> None:
+        self.tasks = tasks
+
+    async def __aenter__(self) -> "_FakeReaperSession":
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def exec(self, _statement: object) -> _FakeScalarResult:
+        active = [t for t in self.tasks if t.status in ("pending", "running")]
+        return _FakeScalarResult(values=active)
+
+    async def get(self, model: type[Task], key: object, **_kwargs: object) -> Task | None:
+        assert model is Task
+        return next((t for t in self.tasks if t.id == key), None)
+
+    def add(self, _item: object) -> None:
+        return None
+
+    async def commit(self) -> None:
+        return None
+
+
+async def test_reaper_fails_only_tasks_without_a_live_worker() -> None:
+    user = _user()
+    project = _project(user)
+    now = utcnow()
+    old = now - timedelta(minutes=10)
+    stale_beat = now - HEARTBEAT_STALE_AFTER - timedelta(seconds=1)
+
+    running_dead = _task(
+        project, user, status="running", started_at=old, heartbeat_at=stale_beat
+    )
+    running_alive = _task(
+        project, user, status="running", started_at=old, heartbeat_at=now
+    )
+    pending_lost = _task(project, user, status="pending", created_at=old)
+    pending_queued = _task(
+        project, user, status="pending", created_at=old, worker_job_id="queued-job"
+    )
+    pending_young = _task(project, user, status="pending", created_at=now)
+    completed = _task(project, user, status="completed", created_at=old)
+    tasks = [
+        running_dead,
+        running_alive,
+        pending_lost,
+        pending_queued,
+        pending_young,
+        completed,
+    ]
+
+    def job_for(job_id: str, redis: object) -> _FakeWorkerJob:
+        if job_id == "queued-job":
+            return _FakeWorkerJob(JobStatus.queued)
+        return _FakeWorkerJob(JobStatus.not_found)
+
+    with (
+        patch(
+            "app.tasks.worker.AsyncSession",
+            return_value=_FakeReaperSession(tasks),
+        ),
+        patch("app.tasks.worker.Job", side_effect=job_for),
+    ):
+        reaped = await reap_orphaned_tasks(object(), object())
+
+    assert reaped == 2
+    assert running_dead.status == "failed"
+    assert running_dead.completed_at is not None
+    assert pending_lost.status == "failed"
+    assert running_alive.status == "running"
+    assert pending_queued.status == "pending"
+    assert pending_young.status == "pending"
+    assert completed.status == "completed"
+
+
+async def test_cancel_task_skips_abort_when_worker_is_gone() -> None:
+    user = _user()
+    project = _project(user)
+    task = _task(
+        project,
+        user,
+        status="running",
+        worker_job_id="job-1",
+        started_at=utcnow() - timedelta(hours=1),
+        heartbeat_at=utcnow() - timedelta(hours=1),
+    )
+    session = _FakeTaskSession([task])
+    abort_worker_job = AsyncMock()
+
+    with (
+        patch("app.tasks.service.get_project", new=AsyncMock(return_value=project)),
+        patch("app.tasks.service._abort_worker_job", new=abort_worker_job),
+    ):
+        result = await cancel_task(session, task.id, user)
+
+    abort_worker_job.assert_not_called()
+    assert result.status == "cancelled"
+    assert task.completed_at is not None
+
+
+async def test_cancel_task_keeps_status_set_while_aborting() -> None:
+    # The job finished while the abort was in flight: keep "completed".
+    user = _user()
+    project = _project(user)
+    task = _task(
+        project, user, status="running", worker_job_id="job-1", heartbeat_at=utcnow()
+    )
+    session = _FakeTaskSession([task])
+
+    async def finish_meanwhile(*_args: object, **_kwargs: object) -> None:
+        task.status = "completed"
+
+    with (
+        patch("app.tasks.service.get_project", new=AsyncMock(return_value=project)),
+        patch("app.tasks.service._set_user_cancel_marker", new=AsyncMock()),
+        patch("app.tasks.service._abort_worker_job", new=finish_meanwhile),
+    ):
+        result = await cancel_task(session, task.id, user)
+
+    assert result.status == "completed"
+
+
+async def test_delete_task_skips_abort_when_worker_is_gone() -> None:
+    user = _user()
+    project = _project(user)
+    task = _task(
+        project,
+        user,
+        status="failed",
+        worker_job_id="job-1",
+        started_at=utcnow() - timedelta(hours=1),
+        heartbeat_at=utcnow() - timedelta(hours=1),
+    )
+    session = _FakeTaskSession([task])
+    abort_worker_job = AsyncMock()
+
+    with (
+        patch("app.tasks.service.get_project", new=AsyncMock(return_value=project)),
+        patch("app.tasks.service._abort_worker_job", new=abort_worker_job),
+    ):
+        await delete_task(session, task.id, user)
+
+    abort_worker_job.assert_not_called()
+    assert session.tasks == []
