@@ -30,6 +30,13 @@ docker compose -f compose.yml -f compose.dev.yml exec api \
   python -m app.cli create-admin --email you@example.com --name "Your Name"
 ```
 
+Deleting a task or project also deletes its screenshot files. To find files left
+behind by deletions made before that (dry run; add `--apply` to delete them):
+
+```bash
+docker compose -f compose.yml -f compose.prod.yml exec api python -m app.cli cleanup-files
+```
+
 ## Environment Variables
 
 | Variable | Description |

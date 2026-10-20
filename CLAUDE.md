@@ -39,9 +39,17 @@ npm run lint     # eslint
 alembic revision -m "describe change"
 alembic upgrade head
 
+# Operator CLI (in Docker: docker compose … exec api python -m app.cli …)
+python -m app.cli create-admin --email you@example.com   # first admin; no public sign-up
+python -m app.cli cleanup-files [--apply]                # files left by deleted rows
+
 # Knowledge graph — run after editing code this session (AST-only, no API cost)
 graphify update .
 ```
+
+CI (`.github/workflows/ci.yml`) runs `ruff check`, `pytest`, an Alembic
+upgrade → downgrade -1 → upgrade round-trip on Postgres 16, and the frontend
+`lint` + `build` (Node 22).
 
 Most tests use in-process **fakes** (see Testing below), so the suite runs without
 standing up Postgres/Redis/Playwright.
@@ -58,6 +66,7 @@ app/                 FastAPI application — one package per domain
   settings/          app-level (DB) settings overriding .env defaults
   users/             user admin
   worker/            ARQ WorkerSettings entrypoint
+  cli.py             operator commands (create-admin, cleanup-files)
   main.py            create_app() factory
 alembic/versions/    chained migrations
 frontend/src/        React/Vite SPA (api/ components/ hooks/ lib/ pages/ store/ types/)
@@ -89,20 +98,37 @@ sensible default message.
 their first argument. Query with `session.exec(select(...))`, `session.get(Model, id)`,
 then `session.add(...)` / `await session.commit()` / `await session.refresh(...)`.
 
-**Auth & ownership.** `get_current_user` / `get_current_admin_user` from
+**Auth & access.** `get_current_user` / `get_current_admin_user` from
 [app/auth/dependencies.py](app/auth/dependencies.py). A token may arrive as a
 **cookie or Bearer**; the JWT carries a `jti` (checked against a revocation list)
 plus a staleness check that invalidates tokens issued before a password change.
-Resource ownership is enforced inside services by calling
-`get_project(session, project_id, user)` before acting — replicate this for any
-project-scoped resource.
+There is **no public sign-up**: admins create users (`POST /users`), the first
+admin comes from `python -m app.cli create-admin`. Global settings (`/settings`)
+are admin-only.
+
+**Projects are shared.** Every signed-in user sees every project, task and
+screenshot, and may run captures/re-captures, edit the sitemap URL selection and
+delete tasks. Only the project's owner (`projects.owner_id`) or an admin may
+rename it, change its URL or `ProjectConfig`, or delete it: services call
+`get_project(...)` (existence only) and then `ensure_can_manage_project(project,
+user)` ([projects/service.py](app/projects/service.py)). The frontend mirrors
+this with `canManageProject` (lib/helpers.ts) — hide, don't just disable, the
+owner-only actions.
 
 **Models.** Each `models.py` holds the SQLModel `table=True` entity plus its
 `*Create` / `*Read` / `*Response` Pydantic schemas; build `*Read` via a `from_*`
 classmethod (e.g. `TaskRead.from_task`). Postgres specifics: `JSONB` for list/dict
-columns, `PGUUID`, `datetime.utcnow`, FKs with `ondelete="CASCADE"`. Status fields
-are plain strings whose allowed values are documented inline (e.g. a Task is
-`pending | running | completed | failed | cancelled | timed_out`).
+columns, `PGUUID`, FKs with `ondelete="CASCADE"`. Status fields are plain strings
+whose allowed values are documented inline (e.g. a Task is
+`pending | running | completed | failed | cancelled | timed_out`; a Screenshot is
+`ok | failed | recapturing`).
+
+**Time is UTC, always aware.** Every timestamp column is `timestamptz`, declared
+as `Field(..., sa_type=UtcDateTime)`; "now" is `utcnow()` — both from
+[app/core/time.py](app/core/time.py). Never use `datetime.utcnow()` or naive
+datetimes (asyncpg would read a naive value in the process's local zone). The API
+returns ISO strings with `Z`; the frontend shows them in the user's profile time
+zone (`users.timezone`, NULL = the browser's).
 
 **Settings.** [app/core/config.py](app/core/config.py) (pydantic-settings) validates
 `SECRET_KEY` (≥32 chars, not the placeholder). Note the **dual-config** model: many
@@ -115,14 +141,18 @@ A few stay `.env`-only (CORS origins, cookie flags, SMTP credentials). See
 ## Screenshot capture pipeline (core flow)
 
 1. **Dispatch** — `create_task` in [tasks/service.py](app/tasks/service.py): verify
-   project ownership → guard against a second `pending`/`running` task for the same
+   the project exists → guard against a second `pending`/`running` task for the same
    project → resolve effective browsers/viewports and target URLs → compute
    `progress_total` (URLs × viewport-browser combos) → persist → enqueue the ARQ job
-   `run_screenshot_task` with a deterministic `_job_id = "screenshot-task:{task_id}"`.
-   If enqueue fails, the task is flipped to `failed` so it never hangs in `pending`.
+   `run_screenshot_task` with a deterministic `_job_id = "screenshot-task:{task_id}"`
+   (`worker_job_id_for`). If enqueue fails, the task is flipped to `failed` so it
+   never hangs in `pending`.
 
-2. **Run** — `run_screenshot_task` in [tasks/worker.py](app/tasks/worker.py): mark
-   `running` → build the flat `(url, viewport, browser)` combo list → obtain one
+2. **Run** — `run_screenshot_task` in [tasks/worker.py](app/tasks/worker.py): claim
+   the task under a row lock (`pending` → `running`; any other status → return
+   without doing anything, so a stale or re-delivered job never runs a task twice)
+   → load the run plan (`_load_run_plan`, inside the main `try`, so a setup error
+   fails the task) → build the flat `(url, viewport, browser)` combo list → obtain one
    Playwright browser per unique browser name via `_launch_browser` (see **Remote
    browser** below) → a **producer/consumer** pool over an `asyncio.Queue` with
    `SEM_LIMIT` consumers works through `(url, browser, [viewports])` groups (one group
@@ -130,7 +160,11 @@ A few stay `.env`-only (CORS origins, cookie flags, SMTP credentials). See
    viewports) → every `capture_screenshot` holds a slot of the worker-wide
    `CaptureLimiter` ([tasks/limiter.py](app/tasks/limiter.py)), so `SEM_LIMIT` bounds
    pages across *all* running tasks and re-captures → progress is flushed to the DB
-   periodically → final status is set at the end.
+   periodically while a background task beats `tasks.heartbeat_at` every 30 s →
+   final status is set at the end. **Every terminal status goes through
+   `finish_task`**, which only moves a task out of `pending`/`running` (a status set
+   first elsewhere, e.g. a user's `cancelled`, is kept) and always sets
+   `completed_at`.
 
 3. **EffectiveConfig precedence** (which browsers run): per-viewport `browsers` >
    task `override_browsers` > legacy `override_browser` > `ProjectConfig.default_browsers`.
@@ -143,17 +177,35 @@ A few stay `.env`-only (CORS origins, cookie flags, SMTP credentials). See
    (→ `failed`). `reset_orphaned_recapturing` runs on worker startup to recover rows
    stuck in `recapturing` after a crash/redeploy.
 
+   **Orphaned tasks** (worker killed/OOM, job lost): `reap_orphaned_tasks` fails
+   `running` tasks without a heartbeat for 150 s and `pending` tasks older than
+   2 min whose ARQ job is gone; it runs at worker startup and every 5 minutes as an
+   ARQ cron job. `run_screenshot_task` is registered with `max_tries=1`, so ARQ never
+   re-runs a capture after a kill (that used to duplicate screenshot rows).
+   `cancel_task`/`delete_task` skip the ARQ abort when the task's worker is gone
+   (`task_is_alive`, [tasks/lifecycle.py](app/tasks/lifecycle.py)) — a dead job's
+   in-progress key lives for `job_timeout` + 10 s and an abort would only time out.
+
 5. **Storage & signed URLs** — [screenshots/storage.py](app/screenshots/storage.py).
    Files live at `DATA_DIR/{project}/{task}/{sanitised_url}/{w}x{h}_{browser}.{ext}`
    and are served only through **HMAC-SHA256 signed URLs** (`/files/...?token=`,
    `/archives/...?token=`) verified with `hmac.compare_digest`. Task archives are
-   zipped in a thread pool (`run_in_executor`) and cached on disk.
+   zipped in a thread pool (`run_in_executor`) and cached on disk
+   (`archive_path(task_id)`); a finished re-capture drops the task's cached ZIP.
+
+6. **Deleting** a task or project removes its files after the DB commit
+   (`delete_task_files` / `delete_project_files`, in a thread, never outside
+   `DATA_DIR`). Both refuse (409) while a capture or re-capture is running for it.
+   `python -m app.cli cleanup-files` finds what older deletions left behind.
 
 ## Worker runtime
 
 [app/worker/main.py](app/worker/main.py) defines `WorkerSettings` (`functions =
-[run_screenshot_task, recapture_screenshot]`, `max_jobs = WORKER_MAX_JOBS`, `job_timeout =
-TASK_JOB_TIMEOUT_SECONDS`, `allow_abort_jobs`, startup/shutdown hooks). `startup` puts the
+[func(run_screenshot_task, max_tries=1), recapture_screenshot]`, `cron_jobs` = the
+5-minute orphan reaper, `max_jobs = WORKER_MAX_JOBS`, `job_timeout =
+TASK_JOB_TIMEOUT_SECONDS`, `allow_abort_jobs`, startup/shutdown hooks). The compose
+`worker` service has `stop_grace_period: 30s` so a SIGTERM'd capture can record its
+status. `startup` puts the
 shared `CaptureLimiter` into `ctx["capture_limiter"]`; jobs resize it to the effective
 `sem_limit` (jobs run without it — unit tests — fall back to a job-local limiter). Run it
 with `python -m arq app.worker.main.WorkerSettings` (the `worker` compose service does this).
@@ -224,6 +276,11 @@ Under [frontend/src/](frontend/src/):
 - **Data fetching** via **TanStack Query**; route guards `ProtectedRoute` /
   `PublicRoute` / `AdminRoute` and the `AuthBootstrap` wrapper live in
   [App.tsx](frontend/src/App.tsx). Forms use react-hook-form + zod; toasts use sonner.
+- **Dates:** render API timestamps with `<DateTime value relative?>`
+  (components/ui/DateTime.tsx); sort/compare with `apiDateMs`
+  ([lib/datetime.ts](frontend/src/lib/datetime.ts)). Never `new Date(apiString)` or
+  `toLocaleString()` directly — the module reads offset-less values as UTC and
+  formats in the profile time zone ("Oct 20, 2026, 15:42").
 
 ## Testing
 
@@ -249,7 +306,8 @@ compose service.
   [tasks/worker.py](app/tasks/worker.py)).
 - **Never block the event loop** — offload CPU/sync work (e.g. zipping) via
   `run_in_executor`.
-- **Don't clobber an externally set `cancelled` status** when finalizing a task.
+- **Don't clobber an externally set `cancelled` status** when finalizing a task —
+  write terminal statuses through `finish_task`.
 - **Storage paths are posix** (Linux/Docker target) — keep `/` separators.
 - **`override_browser` (singular) is legacy**; prefer `override_browsers` (list).
 
@@ -261,8 +319,10 @@ compose service.
 | Config / dual-config settings | [app/core/config.py](app/core/config.py), [app/settings/service.py](app/settings/service.py) |
 | Typed HTTP errors | [app/core/exceptions.py](app/core/exceptions.py) |
 | Async DB session | [app/core/database.py](app/core/database.py) |
-| Auth & ownership deps | [app/auth/dependencies.py](app/auth/dependencies.py) |
-| Task dispatch / lifecycle | [app/tasks/service.py](app/tasks/service.py) |
+| Auth deps | [app/auth/dependencies.py](app/auth/dependencies.py) |
+| Task dispatch / lifecycle | [app/tasks/service.py](app/tasks/service.py), [app/tasks/lifecycle.py](app/tasks/lifecycle.py) |
+| UTC time helpers | [app/core/time.py](app/core/time.py) |
+| Operator CLI | [app/cli.py](app/cli.py) |
 | Capture pipeline (ARQ jobs) | [app/tasks/worker.py](app/tasks/worker.py) |
 | Capture + signed-URL storage | [app/screenshots/service.py](app/screenshots/service.py), [app/screenshots/storage.py](app/screenshots/storage.py) |
 | Worker entrypoint | [app/worker/main.py](app/worker/main.py) |
