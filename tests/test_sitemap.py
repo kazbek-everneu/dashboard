@@ -15,6 +15,15 @@ from app.projects.sitemap import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _public_dns():
+    """Resolve every host to a public IP so the tests never hit real DNS."""
+    with patch(
+        "app.core.url_security._resolve_host_ips", return_value={"93.184.216.34"}
+    ):
+        yield
+
+
 def _ns(tag: str) -> str:
     return f"{{{_NS_SITEMAP}}}{tag}"
 
