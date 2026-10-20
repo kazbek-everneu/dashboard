@@ -1,3 +1,10 @@
+import type { Project, User } from "@/types"
+
+/** Only a project's owner or an admin may edit, reconfigure or delete it. */
+export function canManageProject(project: Pick<Project, "owner_id">, user: User | null): boolean {
+  return !!user && (user.is_admin || project.owner_id === user.id)
+}
+
 export function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleString()
 }

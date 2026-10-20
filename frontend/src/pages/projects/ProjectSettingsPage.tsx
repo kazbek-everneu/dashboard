@@ -27,6 +27,8 @@ import type { ProjectConfig, ViewportConfig } from "@/types"
 
 interface Props {
   isLoading: boolean
+  /** Show the configuration without letting the viewer change it. */
+  readOnly?: boolean
   defaultBrowsers: string[]
   viewports: ViewportConfig[]
   waitUntil: ProjectConfig["wait_until"]
@@ -40,6 +42,7 @@ interface Props {
 
 export default function ProjectSettingsPage({
   isLoading,
+  readOnly = false,
   defaultBrowsers,
   viewports,
   waitUntil,
@@ -62,66 +65,69 @@ export default function ProjectSettingsPage({
   }
 
   return (
-    <FieldGroup>
-      <FieldSet>
-        <FieldLegend>Default browsers</FieldLegend>
-        <FieldDescription>
-          Used for every viewport unless the viewport overrides them. Select one or more.
-        </FieldDescription>
-        <BrowserMultiSelect
-          selected={defaultBrowsers}
-          defaultBrowsers={defaultBrowsers}
-          onChange={(browsers) => onDefaultBrowsersChange(browsers ?? defaultBrowsers)}
-        />
-      </FieldSet>
+    // A disabled fieldset disables every control inside it, nested ones included.
+    <fieldset disabled={readOnly} className="contents">
+      <FieldGroup>
+        <FieldSet>
+          <FieldLegend>Default browsers</FieldLegend>
+          <FieldDescription>
+            Used for every viewport unless the viewport overrides them. Select one or more.
+          </FieldDescription>
+          <BrowserMultiSelect
+            selected={defaultBrowsers}
+            defaultBrowsers={defaultBrowsers}
+            onChange={(browsers) => onDefaultBrowsersChange(browsers ?? defaultBrowsers)}
+          />
+        </FieldSet>
 
-      <FieldSeparator />
+        <FieldSeparator />
 
-      <FieldSet>
-        <FieldLegend>Viewports &amp; browsers</FieldLegend>
-        <FieldDescription>Screen sizes to capture. Drag rows to reorder.</FieldDescription>
-        <ViewportList
-          viewports={viewports}
-          onChange={onViewportsChange}
-          defaultBrowsers={defaultBrowsers}
-        />
-        {viewports.length === 0 && <FieldError>At least one viewport is required.</FieldError>}
-      </FieldSet>
+        <FieldSet>
+          <FieldLegend>Viewports &amp; browsers</FieldLegend>
+          <FieldDescription>Screen sizes to capture. Drag rows to reorder.</FieldDescription>
+          <ViewportList
+            viewports={viewports}
+            onChange={onViewportsChange}
+            defaultBrowsers={defaultBrowsers}
+          />
+          {viewports.length === 0 && <FieldError>At least one viewport is required.</FieldError>}
+        </FieldSet>
 
-      <FieldSeparator />
+        <FieldSeparator />
 
-      <FieldSet>
-        <FieldLegend>Page behaviour</FieldLegend>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <FormField label="Wait until" htmlFor="wait-until">
-            <Select value={waitUntil} onValueChange={onWaitUntilChange}>
-              <SelectTrigger id="wait-until" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="load">load</SelectItem>
-                <SelectItem value="domcontentloaded">domcontentloaded</SelectItem>
-                <SelectItem value="networkidle">networkidle</SelectItem>
-              </SelectContent>
-            </Select>
-          </FormField>
+        <FieldSet>
+          <FieldLegend>Page behaviour</FieldLegend>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField label="Wait until" htmlFor="wait-until">
+              <Select value={waitUntil} onValueChange={onWaitUntilChange}>
+                <SelectTrigger id="wait-until" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="load">load</SelectItem>
+                  <SelectItem value="domcontentloaded">domcontentloaded</SelectItem>
+                  <SelectItem value="networkidle">networkidle</SelectItem>
+                </SelectContent>
+              </Select>
+            </FormField>
 
-          <FormField label="Timeout" htmlFor="timeout" error={timeoutError}>
-            <InputGroup>
-              <InputGroupInput
-                id="timeout"
-                type="number"
-                value={timeout}
-                aria-invalid={!!timeoutError || undefined}
-                onChange={(event) => onTimeoutChange(event.target.value)}
-              />
-              <InputGroupAddon align="inline-end">
-                <InputGroupText>ms</InputGroupText>
-              </InputGroupAddon>
-            </InputGroup>
-          </FormField>
-        </div>
-      </FieldSet>
-    </FieldGroup>
+            <FormField label="Timeout" htmlFor="timeout" error={timeoutError}>
+              <InputGroup>
+                <InputGroupInput
+                  id="timeout"
+                  type="number"
+                  value={timeout}
+                  aria-invalid={!!timeoutError || undefined}
+                  onChange={(event) => onTimeoutChange(event.target.value)}
+                />
+                <InputGroupAddon align="inline-end">
+                  <InputGroupText>ms</InputGroupText>
+                </InputGroupAddon>
+              </InputGroup>
+            </FormField>
+          </div>
+        </FieldSet>
+      </FieldGroup>
+    </fieldset>
   )
 }

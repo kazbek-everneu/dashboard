@@ -8,9 +8,10 @@ import { Plus, FolderOpen, Camera, ListTodo, Pencil, Trash2 } from "lucide-react
 import { toast } from "sonner"
 import { projectsApi } from "@/api/projects"
 import { tasksApi } from "@/api/tasks"
-import { extractApiError } from "@/lib/helpers"
+import { canManageProject, extractApiError } from "@/lib/helpers"
 import { formatRelativeTime, formatDate } from "@/lib/formatters"
 import PageHeader from "@/components/layout/PageHeader"
+import { useAuth } from "@/hooks/useAuth"
 import { EditProjectDialog } from "@/components/projects/EditProjectDialog"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -114,6 +115,7 @@ interface InitialSitemapImportState {
 export default function ProjectsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { user } = useAuth()
 
   const [createOpen, setCreateOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<EnrichedProject | null>(null)
@@ -264,19 +266,23 @@ export default function ProjectsPage() {
         data={rows}
         rowKey={(row) => row.id}
         onRowClick={(row) => navigate(`/projects/${row.id}`)}
-        rowActions={(row) => [
-          {
-            label: "Edit",
-            icon: <Pencil />,
-            onClick: () => setEditTarget(row),
-          },
-          {
-            label: "Delete",
-            icon: <Trash2 />,
-            onClick: () => setDeleteTarget(row),
-            variant: "destructive" as const,
-          },
-        ]}
+        rowActions={(row) =>
+          canManageProject(row, user)
+            ? [
+                {
+                  label: "Edit",
+                  icon: <Pencil />,
+                  onClick: () => setEditTarget(row),
+                },
+                {
+                  label: "Delete",
+                  icon: <Trash2 />,
+                  onClick: () => setDeleteTarget(row),
+                  variant: "destructive" as const,
+                },
+              ]
+            : []
+        }
         isLoading={isLoading}
         sort={sort}
         onSortChange={(key, direction) => setSort({ key, direction })}

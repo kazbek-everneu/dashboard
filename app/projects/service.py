@@ -3,11 +3,16 @@ import uuid
 from collections import defaultdict
 from urllib.parse import urlparse
 
-from sqlmodel import delete, select
+from sqlmodel import col, delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth.models import User
-from app.core.exceptions import ConflictError, NotFoundError, UnprocessableError
+from app.core.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    UnprocessableError,
+)
 from app.core.time import utcnow
 from app.core.url_security import normalize_project_child_url, normalize_project_url
 from app.projects.models import (
@@ -22,6 +27,9 @@ from app.projects.models import (
     SitemapURLCreate,
     SitemapURLUpdate,
 )
+from app.screenshots.models import Screenshot
+from app.tasks.lifecycle import ACTIVE_TASK_STATUSES
+from app.tasks.models import Task
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +111,6 @@ async def list_project_summaries(
     session: AsyncSession,
     user: User,
 ) -> list[ProjectSummary]:
-    from app.tasks.models import Task
-
     projects = await list_projects(session, user, skip=0, limit=500)
     project_ids = [project.id for project in projects]
     if not project_ids:
@@ -134,10 +140,20 @@ async def list_project_summaries(
 async def get_project(
     session: AsyncSession, project_id: uuid.UUID, user: User
 ) -> Project:
+    """Load a project. Every signed-in user can see every project."""
     project = await session.get(Project, project_id)
     if not project:
         raise NotFoundError("Project not found")
     return project
+
+
+def ensure_can_manage_project(project: Project, user: User) -> None:
+    """Only the project's owner or an admin may edit, reconfigure or delete it.
+
+    Everyone else can still run captures and choose the sitemap URLs.
+    """
+    if not (user.is_admin or project.owner_id == user.id):
+        raise ForbiddenError("Only the project owner or an admin can do this")
 
 
 async def update_project(
@@ -147,6 +163,7 @@ async def update_project(
     user: User,
 ) -> Project:
     project = await get_project(session, project_id, user)
+    ensure_can_manage_project(project, user)
     if data.url is not None:
         project.url = await normalize_project_url(data.url)
     if data.name is not None:
@@ -161,6 +178,25 @@ async def delete_project(
     session: AsyncSession, project_id: uuid.UUID, user: User
 ) -> None:
     project = await get_project(session, project_id, user)
+    ensure_can_manage_project(project, user)
+    active_task = await session.exec(
+        select(Task.id)
+        .where(Task.project_id == project_id)
+        .where(col(Task.status).in_(ACTIVE_TASK_STATUSES))
+        .limit(1)
+    )
+    recapturing = await session.exec(
+        select(Screenshot.id)
+        .join(Task, col(Screenshot.task_id) == col(Task.id))
+        .where(Task.project_id == project_id)
+        .where(Screenshot.status == "recapturing")
+        .limit(1)
+    )
+    if active_task.first() is not None or recapturing.first() is not None:
+        raise ConflictError(
+            "A capture is still running for this project. "
+            "Cancel it or wait for it to finish before deleting the project."
+        )
     await session.delete(project)
     await session.commit()
     logger.info("Deleted project id=%s", project_id)
@@ -196,7 +232,8 @@ async def update_project_config(
     data: ProjectConfigUpdate,
     user: User,
 ) -> ProjectConfig:
-    await get_project(session, project_id, user)  # verify project exists
+    project = await get_project(session, project_id, user)
+    ensure_can_manage_project(project, user)
     config = await _get_config_for_project(session, project_id)
 
     update_fields = data.model_dump(exclude_unset=True)
@@ -260,7 +297,7 @@ async def list_sitemap_urls_flat(
     session: AsyncSession, project_id: uuid.UUID, user: User
 ) -> list[SitemapURL]:
     """Return SitemapURL rows as flat list."""
-    await get_project(session, project_id, user)  # ownership check
+    await get_project(session, project_id, user)
 
     result = await session.exec(
         select(SitemapURL)
@@ -277,7 +314,7 @@ async def toggle_sitemap_url(
     data: SitemapURLUpdate,
     user: User,
 ) -> SitemapURL:
-    await get_project(session, project_id, user)  # ownership check
+    await get_project(session, project_id, user)
 
     sitemap_url = await session.get(SitemapURL, url_id)
     if not sitemap_url or sitemap_url.project_id != project_id:
@@ -296,7 +333,7 @@ async def create_sitemap_url(
     data: SitemapURLCreate,
     user: User,
 ) -> SitemapURL:
-    project = await get_project(session, project_id, user)  # ownership check
+    project = await get_project(session, project_id, user)
     normalized_url = await normalize_project_child_url(project.url, data.url)
 
     # Check if URL already exists
@@ -329,7 +366,7 @@ async def bulk_update_sitemap_urls(
     user: User,
 ) -> dict[str, int]:
     """Toggle is_enabled, delete, and create sitemap URLs in one transaction."""
-    project = await get_project(session, project_id, user)  # ownership check
+    project = await get_project(session, project_id, user)
 
     # Toggle is_enabled for existing URLs
     for item in data.updates:

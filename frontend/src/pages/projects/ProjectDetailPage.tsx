@@ -5,9 +5,10 @@ import { ArrowRight, Pencil, Trash2, Plus, Save } from "lucide-react"
 import { toast } from "sonner"
 import { projectsApi } from "@/api/projects"
 import { tasksApi } from "@/api/tasks"
-import { extractApiError } from "@/lib/helpers"
+import { canManageProject, extractApiError } from "@/lib/helpers"
 import { normalizeViewport } from "@/lib/viewportUtils"
 import PageHeader from "@/components/layout/PageHeader"
+import { useAuth } from "@/hooks/useAuth"
 import { useBreadcrumbs } from "@/hooks/useBreadcrumbs"
 import { EditProjectDialog } from "@/components/projects/EditProjectDialog"
 import { Button } from "@/components/ui/button"
@@ -29,6 +30,7 @@ export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { user } = useAuth()
   const [editOpen, setEditOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [defaultBrowsers, setDefaultBrowsers] = useState<string[]>(["chrome"])
@@ -111,6 +113,8 @@ export default function ProjectDetailPage() {
   })
 
   const project = projectQuery.data
+  // Owner/admin only: edit, delete, configuration. Everyone: captures, sitemap.
+  const canManage = !!project && canManageProject(project, user)
   const recentTasks = tasksQuery.data?.items ?? []
   const apiUrls = sitemapQuery.data ?? []
   const allUrls: SitemapURL[] = useMemo(
@@ -148,7 +152,7 @@ export default function ProjectDetailPage() {
     }
     return false
   }, [pendingNewUrls, deleteIds, selectedIds, initialSelectedIds])
-  const hasUnsavedChanges = configDirty || sitemapDirty
+  const hasUnsavedChanges = (canManage && configDirty) || sitemapDirty
   const parsedTimeout = Number(timeout)
   const timeoutError =
     timeout.trim() === ""
@@ -158,7 +162,7 @@ export default function ProjectDetailPage() {
         : parsedTimeout < 1000 || parsedTimeout > 120000
           ? "Timeout must be between 1000 and 120000"
           : undefined
-  const configInvalid = !!timeoutError || viewports.length === 0
+  const configInvalid = canManage && (!!timeoutError || viewports.length === 0)
 
   useEffect(() => {
     if (!hasUnsavedChanges) return
@@ -251,7 +255,7 @@ export default function ProjectDetailPage() {
         await queryClient.invalidateQueries({ queryKey: ["sitemap-urls", id] })
       }
 
-      if (configDirty) {
+      if (canManage && configDirty) {
         await projectsApi.updateConfig(id, {
           wait_until: waitUntil,
           timeout: parsedTimeout,
@@ -285,14 +289,18 @@ export default function ProjectDetailPage() {
                 New Task
               </Link>
             </Button>
-            <Button variant="outline" onClick={() => setEditOpen(true)}>
-              <Pencil data-icon="inline-start" />
-              Edit
-            </Button>
-            <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
-              <Trash2 data-icon="inline-start" />
-              Delete
-            </Button>
+            {canManage && (
+              <>
+                <Button variant="outline" onClick={() => setEditOpen(true)}>
+                  <Pencil data-icon="inline-start" />
+                  Edit
+                </Button>
+                <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
+                  <Trash2 data-icon="inline-start" />
+                  Delete
+                </Button>
+              </>
+            )}
           </>
         }
       />
@@ -362,11 +370,16 @@ export default function ProjectDetailPage() {
             <Card>
               <CardHeader className="border-b">
                 <CardTitle>Configuration</CardTitle>
-                <CardDescription>Adjust browsers, viewports, and capture behavior.</CardDescription>
+                <CardDescription>
+                  {canManage
+                    ? "Adjust browsers, viewports, and capture behavior."
+                    : "Only the project owner or an admin can change the configuration."}
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <ProjectSettingsPage
                   isLoading={configQuery.isLoading}
+                  readOnly={!canManage}
                   defaultBrowsers={defaultBrowsers}
                   viewports={viewports}
                   waitUntil={waitUntil}

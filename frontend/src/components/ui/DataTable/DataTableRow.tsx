@@ -75,32 +75,34 @@ export function DataTableRow<T,>({
           onClick={(e) => e.stopPropagation()}
         >
           {/* Non-modal so an action can open a dialog without leaving the page inert. */}
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Open row actions"
-                className="text-muted-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
-              >
-                <MoreHorizontal />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-40">
-              {actions.map((action, i) => (
-                <Fragment key={action.label}>
-                  {action.variant === "destructive" && i > 0 && <DropdownMenuSeparator />}
-                  <DropdownMenuItem
-                    variant={action.variant ?? "default"}
-                    onSelect={() => action.onClick(row)}
-                  >
-                    {action.icon}
-                    {action.label}
-                  </DropdownMenuItem>
-                </Fragment>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {actions.length > 0 && (
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Open row actions"
+                  className="text-muted-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+                >
+                  <MoreHorizontal />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-40">
+                {actions.map((action, i) => (
+                  <Fragment key={action.label}>
+                    {action.variant === "destructive" && i > 0 && <DropdownMenuSeparator />}
+                    <DropdownMenuItem
+                      variant={action.variant ?? "default"}
+                      onSelect={() => action.onClick(row)}
+                    >
+                      {action.icon}
+                      {action.label}
+                    </DropdownMenuItem>
+                  </Fragment>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </TableCell>
       )}
     </TableRow>
