@@ -643,20 +643,12 @@ def _issue_reason(issue: AssetIssue) -> str:
     return issue.category
 
 
-def _issue_sample(issue: AssetIssue) -> dict[str, Any]:
-    return {
-        "kind": issue.kind,
-        "url": issue.url,
-        "status": issue.status,
-        "reason": issue.reason,
-        "category": issue.category,
-    }
-
-
 def _report_assets(run: CaptureRun, state: _Recovery) -> None:
     """Recovered resources → ``assets_recovered``; what is still broken →
-    ``styles_missing`` / ``assets_missing`` (the capture stays ok). Pending
-    images are left to readiness's ``assets_pending`` when it recorded one."""
+    ``styles_missing`` (stylesheets) / ``assets_missing`` (images and
+    backgrounds) — the capture stays ok. Pending images are readiness's
+    ``assets_pending``; font issues are informational (``fonts_timeout`` is
+    readiness's too), so neither is reported here."""
     report = run.report
     recovered = state.in_place + state.after_reload
     if recovered:
@@ -665,15 +657,13 @@ def _report_assets(run: CaptureRun, state: _Recovery) -> None:
             f"{recovered} broken resource(s) loaded after a retry",
             in_place=state.in_place,
             after_reload=state.after_reload,
-            samples=[_issue_sample(issue) for issue in state.recovered],
+            samples=[readiness.issue_sample(issue) for issue in state.recovered],
         )
     styles = [issue for issue in state.issues if issue.kind == "stylesheet"]
-    pending_reported = report.warning("assets_pending") is not None
     assets = [
         issue
         for issue in state.issues
-        if issue.kind != "stylesheet"
-        and not (issue.category == "pending" and pending_reported)
+        if issue.kind in _IMAGE_KINDS and issue.category != "pending"
     ]
     if styles:
         report.warn(
@@ -681,7 +671,7 @@ def _report_assets(run: CaptureRun, state: _Recovery) -> None:
             f"{len(styles)} stylesheet(s) did not load; the page may look unstyled",
             urls=[issue.url for issue in styles[:MAX_SAMPLES]],
             reasons=[_issue_reason(issue) for issue in styles[:MAX_SAMPLES]],
-            samples=[_issue_sample(issue) for issue in styles],
+            samples=[readiness.issue_sample(issue) for issue in styles],
         )
     if assets:
         kinds: dict[str, int] = {}
@@ -692,7 +682,9 @@ def _report_assets(run: CaptureRun, state: _Recovery) -> None:
         # One warn per asset: the merged warning counts them and keeps the
         # first MAX_SAMPLES as samples.
         for issue in assets:
-            report.warn("assets_missing", message, samples=[_issue_sample(issue)])
+            report.warn(
+                "assets_missing", message, samples=[readiness.issue_sample(issue)]
+            )
 
 
 # ---------------------------------------------------------------------------

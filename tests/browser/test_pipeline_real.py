@@ -150,7 +150,10 @@ async def test_missing_image_keeps_the_screenshot(engine, browsers, site) -> Non
     url = site.add("/", MISSING_IMAGE_PAGE)
     browser = await browsers(engine)
 
-    result = await capture(browser, url, browser_name=engine, viewport=(1280, 800))
+    # A short project timeout keeps the readiness windows short (see below).
+    result = await capture(
+        browser, url, browser_name=engine, viewport=(1280, 800), timeout=5000
+    )
 
     assert result.ok, result.error
     assert result.attempts == 1
@@ -170,10 +173,25 @@ async def test_missing_image_keeps_the_screenshot(engine, browsers, site) -> Non
     assert site.hits["/"] == 1
 
 
-# TODO(integration): drop the marker once readiness reports stylesheet issues.
+# TODO(integration): readiness's /*qa:stability-state*/ counts a broken image
+# (complete, naturalWidth 0) as pending, so a page with a visible 404 image
+# waits out the whole readiness window and the second chance and is captured
+# as dom_unstable. Drop the marker once it only counts images still loading.
 @pytest.mark.xfail(
-    reason="readiness does not report stylesheet issues yet (B4)", strict=False
+    reason="readiness counts broken images as pending (B4)", strict=False
 )
+async def test_missing_image_does_not_hold_up_readiness(browsers, site) -> None:
+    url = site.add("/", MISSING_IMAGE_PAGE)
+    browser = await browsers("chrome")
+
+    result = await capture(browser, url, viewport=(1280, 800), timeout=5000)
+
+    assert result.ok, result.error
+    assert result.outcome.captured_with_unstable_dom is False
+    assert "dom_unstable" not in result.report.warning_codes()
+    assert result.report.timings_ms["readiness"] < 8000
+
+
 @pytest.mark.parametrize("engine", ENGINES)
 async def test_stylesheet_served_as_html_once_is_recovered(
     engine, browsers, site

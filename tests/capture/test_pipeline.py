@@ -856,23 +856,28 @@ def test_reload_reason(issues: tuple[AssetIssue, ...], expected: str | None) -> 
     assert pipeline.reload_reason(issues, _nav()) == expected
 
 
-async def test_pending_images_are_left_to_assets_pending() -> None:
-    pending = AssetIssue(kind="img", url=IMG, category="pending")
-
-    async def finalize(run, **_kwargs):
-        run.report.warn("assets_pending", "Visible images are still loading")
-        return ReadinessResult(issues=(pending,))
+async def test_pending_images_and_fonts_are_left_to_readiness() -> None:
+    # Pending images are readiness's assets_pending; font issues are
+    # informational (fonts_timeout) — neither is assets_missing nor reloaded.
+    issues = (
+        AssetIssue(kind="img", url=IMG, category="pending"),
+        AssetIssue(kind="font", url=f"{CSS}.woff2", category="blocked", status=403),
+    )
+    reload = AsyncMock()
 
     with (
         patch(
             "app.screenshots.capture.readiness.finalize",
-            AsyncMock(side_effect=finalize),
+            _finalize(ReadinessResult(issues=issues)),
         ),
         patch("app.screenshots.capture.readiness.retry_in_place", _retry_in_place()),
+        patch("app.screenshots.capture.navigation.reload", reload),
     ):
         outcome = await _run(FakePage())
 
-    assert outcome.report.warning("assets_missing") is None
+    assert outcome.data == b"img"
+    reload.assert_not_awaited()
+    assert outcome.report.warning_codes() == []
 
 
 async def test_report_status_runs_once_after_recovery() -> None:

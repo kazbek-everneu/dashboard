@@ -146,9 +146,11 @@ async def test_capture_screenshot_saves_a_page_with_a_missing_image(
     assert "status=ok warnings=['assets_missing']" in capture_lines[0]
 
 
-async def test_capture_screenshot_report_keeps_the_network_diagnostics(
+async def test_capture_screenshot_reloads_once_for_an_unreachable_image(
     tmp_path: Path,
 ) -> None:
+    # The network says the image failed to connect: worth one reload in
+    # place; it stays broken, so the screenshot is saved with the warning.
     page = FakePage(
         script_results={
             "decode-images": {**MISSING_IMAGE_STATE, "hiddenPendingImageCount": 0}
@@ -173,9 +175,19 @@ async def test_capture_screenshot_report_keeps_the_network_diagnostics(
         result, output_path = await _capture(page, tmp_path)
 
     assert result.status == "ok"
+    assert result.error_message is None
     assert output_path.read_bytes() == b"img"
+    assert len(page.goto_calls) == 1
+    assert len(page.reload_calls) == 1
     (capture,) = results
-    assert capture.report.to_db()[0][0]["code"] == "assets_missing"
+    assert capture.attempts == 1
+    codes = capture.report.warning_codes()
+    assert "page_reloaded" in codes and "assets_missing" in codes
+    missing = capture.report.warning("assets_missing")
+    assert missing is not None
+    assert missing.details["samples"][0]["url"] == "https://cdn.example.com/missing.jpg"
+    assert missing.details["samples"][0]["category"] == "network"
+    assert [w["code"] for w in result.warnings] == codes
 
 
 async def test_capture_screenshot_does_not_save_blank_page(tmp_path: Path) -> None:
