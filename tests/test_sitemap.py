@@ -1,8 +1,9 @@
 """Tests for WordPress sitemap parser."""
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 from app.projects.sitemap import (
@@ -140,8 +141,32 @@ class TestParseSitemapIndex:
 # fetch_sitemap_urls (integration — httpx mocked)
 # ---------------------------------------------------------------------------
 
+def _xml_response(url: str, text: str, status: int = 200) -> httpx.Response:
+    return httpx.Response(status, text=text, request=httpx.Request("GET", url))
+
+
+def _redirect(url: str, location: str, status: int = 302) -> httpx.Response:
+    return httpx.Response(
+        status,
+        headers={"location": location},
+        request=httpx.Request("GET", url),
+    )
+
+
+def _mock_client(handler) -> AsyncMock:
+    """An httpx.AsyncClient stand-in whose ``get`` answers via *handler(url)*."""
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=lambda url, **_kwargs: handler(str(url)))
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    return client
+
+
+def _requested_urls(client: AsyncMock) -> list[str]:
+    return [str(call.args[0]) for call in client.get.call_args_list]
+
+
 class TestFetchSitemapUrls:
-    @pytest.mark.asyncio
     async def test_full_flow(self) -> None:
         index_xml = ET.tostring(
             _make_sitemapindex(
@@ -158,24 +183,14 @@ class TestFetchSitemapUrls:
             _make_urlset("https://example.com/hello-world"),
             encoding="unicode",
         )
+        text_map = {
+            "https://example.com/sitemap_index.xml": index_xml,
+            "https://example.com/page-sitemap.xml": page_xml,
+            "https://example.com/post-sitemap.xml": post_xml,
+        }
+        client = _mock_client(lambda url: _xml_response(url, text_map[url]))
 
-        def _response(url: str, **_kwargs) -> MagicMock:
-            text_map = {
-                "https://example.com/sitemap_index.xml": index_xml,
-                "https://example.com/page-sitemap.xml": page_xml,
-                "https://example.com/post-sitemap.xml": post_xml,
-            }
-            mock = MagicMock()
-            mock.text = text_map[str(url)]
-            mock.raise_for_status = MagicMock()
-            return mock
-
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("app.projects.sitemap.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.projects.sitemap.httpx.AsyncClient", return_value=client):
             results = await fetch_sitemap_urls("https://example.com")
 
         assert SitemapEntry("https://example.com/about", "page", None, 0) in results
@@ -183,7 +198,6 @@ class TestFetchSitemapUrls:
         assert SitemapEntry("https://example.com/hello-world", "post", None, 2) in results
         assert len(results) == 3
 
-    @pytest.mark.asyncio
     async def test_skips_local_sitemap_everywhere(self) -> None:
         index_xml = ET.tostring(
             _make_sitemapindex(
@@ -199,23 +213,13 @@ class TestFetchSitemapUrls:
             ),
             encoding="unicode",
         )
+        text_map = {
+            "https://example.com/sitemap_index.xml": index_xml,
+            "https://example.com/post-sitemap.xml": post_xml,
+        }
+        client = _mock_client(lambda url: _xml_response(url, text_map[url]))
 
-        def _response(url: str, **_kwargs) -> MagicMock:
-            text_map = {
-                "https://example.com/sitemap_index.xml": index_xml,
-                "https://example.com/post-sitemap.xml": post_xml,
-            }
-            mock = MagicMock()
-            mock.text = text_map[str(url)]
-            mock.raise_for_status = MagicMock()
-            return mock
-
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("app.projects.sitemap.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.projects.sitemap.httpx.AsyncClient", return_value=client):
             results = await fetch_sitemap_urls("https://example.com")
 
         assert results == [
@@ -227,34 +231,64 @@ class TestFetchSitemapUrls:
             )
         ]
 
-    @pytest.mark.asyncio
     async def test_raises_on_http_error(self) -> None:
-        import httpx
+        client = _mock_client(lambda url: _xml_response(url, "", status=404))
 
-        mock_client = AsyncMock()
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-        mock_client.get = AsyncMock(
-            side_effect=httpx.HTTPStatusError("not found", request=MagicMock(), response=mock_response)
-        )
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("app.projects.sitemap.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.projects.sitemap.httpx.AsyncClient", return_value=client):
             with pytest.raises(RuntimeError, match="HTTP 404"):
                 await fetch_sitemap_urls("https://example.com")
 
-    @pytest.mark.asyncio
     async def test_raises_on_wrong_root_element(self) -> None:
         bad_xml = "<rss><channel></channel></rss>"
-        mock_client = AsyncMock()
-        mock_resp = MagicMock()
-        mock_resp.text = bad_xml
-        mock_resp.raise_for_status = MagicMock()
-        mock_client.get = AsyncMock(return_value=mock_resp)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        client = _mock_client(lambda url: _xml_response(url, bad_xml))
 
-        with patch("app.projects.sitemap.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.projects.sitemap.httpx.AsyncClient", return_value=client):
             with pytest.raises(RuntimeError, match="Unexpected root element"):
                 await fetch_sitemap_urls("https://example.com")
+
+    async def test_follows_relative_redirect(self) -> None:
+        urlset_xml = ET.tostring(
+            _make_urlset("https://example.com/about"), encoding="unicode"
+        )
+
+        def handler(url: str) -> httpx.Response:
+            if url == "https://example.com/sitemap_index.xml":
+                return _redirect(url, "/moved/sitemap.xml", status=301)
+            return _xml_response(url, urlset_xml)
+
+        client = _mock_client(handler)
+        with patch("app.projects.sitemap.httpx.AsyncClient", return_value=client):
+            results = await fetch_sitemap_urls("https://example.com")
+
+        assert results == [SitemapEntry("https://example.com/about", "page", None, 0)]
+        assert _requested_urls(client) == [
+            "https://example.com/sitemap_index.xml",
+            "https://example.com/moved/sitemap.xml",
+        ]
+        for call in client.get.call_args_list:
+            assert call.kwargs["follow_redirects"] is False
+
+    async def test_refuses_redirect_to_private_address(self) -> None:
+        async def resolve(hostname: str) -> set[str]:
+            return {"10.0.0.5"} if hostname == "internal.local" else {"93.184.216.34"}
+
+        client = _mock_client(
+            lambda url: _redirect(url, "http://internal.local/latest/meta-data")
+        )
+        with (
+            patch("app.core.url_security._resolve_host_ips", side_effect=resolve),
+            patch("app.projects.sitemap.httpx.AsyncClient", return_value=client),
+            pytest.raises(RuntimeError, match="Refusing redirect"),
+        ):
+            await fetch_sitemap_urls("https://example.com")
+
+        assert not any("internal.local" in url for url in _requested_urls(client))
+
+    async def test_stops_after_too_many_redirects(self) -> None:
+        client = _mock_client(lambda url: _redirect(url, url + "x"))
+
+        with (
+            patch("app.projects.sitemap.httpx.AsyncClient", return_value=client),
+            pytest.raises(RuntimeError, match="Too many redirects"),
+        ):
+            await fetch_sitemap_urls("https://example.com")

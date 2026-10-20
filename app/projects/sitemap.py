@@ -9,7 +9,12 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from defusedxml import ElementTree
 
-from app.core.url_security import normalize_project_child_url, normalize_project_url
+from app.core.exceptions import UnprocessableError
+from app.core.url_security import (
+    normalize_project_child_url,
+    normalize_project_url,
+    validate_public_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +24,7 @@ _NS_SITEMAP = "http://www.sitemaps.org/schemas/sitemap/0.9"
 # Matches e.g. "product-sitemap.xml", "page-sitemap2.xml"
 _CPT_RE = re.compile(r"^([a-z0-9_-]+?)-sitemap\d*\.xml$", re.IGNORECASE)
 _LOCAL_SITEMAP_FILENAME = "local-sitemap.xml"
+_MAX_REDIRECTS = 5
 
 
 @dataclass(frozen=True)
@@ -101,10 +107,34 @@ def _parse_urlset(root: ElementTree.Element) -> list[tuple[str, datetime | None]
     return parsed
 
 
+async def _get_with_safe_redirects(
+    client: httpx.AsyncClient, url: str
+) -> httpx.Response:
+    """GET *url*, following redirects only to public http(s) addresses.
+
+    httpx's own ``follow_redirects`` would fetch any target, so a public site
+    could bounce the request to an internal host (Redis, cloud metadata, ...).
+    Every hop is re-validated with the same check as the project URL.
+    """
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        response = await client.get(current, follow_redirects=False, timeout=30)
+        if not response.is_redirect:
+            return response
+        target = urljoin(current, response.headers["location"])
+        try:
+            current = await validate_public_url(target)
+        except UnprocessableError as exc:
+            raise RuntimeError(
+                f"Refusing redirect from {current} to {target}: {exc.detail}"
+            ) from exc
+    raise RuntimeError(f"Too many redirects fetching {url}")
+
+
 async def _fetch_xml(client: httpx.AsyncClient, url: str) -> ElementTree.Element:
     """Fetch a URL and parse as XML. Raises on HTTP or parse errors."""
     try:
-        response = await client.get(url, follow_redirects=True, timeout=30)
+        response = await _get_with_safe_redirects(client, url)
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         raise RuntimeError(
