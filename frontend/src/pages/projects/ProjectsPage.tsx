@@ -8,13 +8,14 @@ import { Plus, FolderOpen, Camera, ListTodo, Pencil, Trash2 } from "lucide-react
 import { toast } from "sonner"
 import { projectsApi } from "@/api/projects"
 import { tasksApi } from "@/api/tasks"
+import { apiDateMs } from "@/lib/datetime"
 import { canManageProject, extractApiError } from "@/lib/helpers"
-import { formatRelativeTime, formatDate } from "@/lib/formatters"
 import PageHeader from "@/components/layout/PageHeader"
 import { useAuth } from "@/hooks/useAuth"
 import { EditProjectDialog } from "@/components/projects/EditProjectDialog"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { DateTime } from "@/components/ui/DateTime"
 import { Input } from "@/components/ui/input"
 import { FormField } from "@/components/ui/FormField"
 import { FormDialogFooter } from "@/components/ui/FormDialogFooter"
@@ -90,9 +91,7 @@ const projectColumns: ColumnDef<EnrichedProject>[] = [
     sortKey: "created_at",
     hideOnMobile: true,
     cell: (row) => (
-      <span className="text-sm text-muted-foreground" title={formatDate(row.created_at)}>
-        {formatRelativeTime(row.created_at)}
-      </span>
+      <DateTime value={row.created_at} relative className="text-sm text-muted-foreground" />
     ),
   },
 ]
@@ -222,7 +221,7 @@ export default function ProjectsPage() {
       let v = 0
       if (sort.key === "name") v = a.name.localeCompare(b.name)
       else if (sort.key === "created_at")
-        v = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        v = apiDateMs(a.created_at) - apiDateMs(b.created_at)
       return sort.direction === "asc" ? v : -v
     })
   }, [projects, summaries, sort])

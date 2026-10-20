@@ -6,6 +6,8 @@ converts it to the viewer's time zone. Use :func:`utcnow` for "now" and
 :class:`UtcDateTime` as the column type of every datetime model field.
 """
 
+import functools
+import zoneinfo
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,6 +19,12 @@ from sqlalchemy.types import TypeDecorator
 def utcnow() -> datetime:
     """The current time as an aware UTC datetime."""
     return datetime.now(UTC)
+
+
+@functools.cache
+def known_timezones() -> frozenset[str]:
+    """IANA time zone names a user may pick for displaying times."""
+    return frozenset(zoneinfo.available_timezones() | {"UTC"})
 
 
 def as_utc(value: datetime) -> datetime:

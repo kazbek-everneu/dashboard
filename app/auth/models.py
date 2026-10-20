@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
 
+from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
-from app.core.time import UtcDateTime, utcnow
+from app.core.time import UtcDateTime, known_timezones, utcnow
 
 
 class User(SQLModel, table=True):
@@ -17,6 +18,8 @@ class User(SQLModel, table=True):
     is_admin: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
     password_changed_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    # IANA time zone the UI shows times in; None = the browser's own zone.
+    timezone: str | None = Field(default=None, max_length=64)
 
 
 class PasswordResetToken(SQLModel, table=True):
@@ -44,6 +47,15 @@ class UserUpdate(SQLModel):
     name: str | None = None
     password: str | None = None
     is_admin: bool | None = None
+    # Sending null resets to "follow the browser"; omitting it keeps the value.
+    timezone: str | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str | None) -> str | None:
+        if v is not None and v not in known_timezones():
+            raise ValueError(f"Unknown time zone: {v!r}")
+        return v
 
 
 class UserRead(SQLModel):
@@ -53,6 +65,7 @@ class UserRead(SQLModel):
     is_active: bool
     is_admin: bool
     created_at: datetime
+    timezone: str | None = None
 
 
 class UserListResponse(SQLModel):

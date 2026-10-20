@@ -10,7 +10,7 @@ import { usersApi } from "@/api/users"
 import { useAuth } from "@/hooks/useAuth"
 import type { User } from "@/types"
 import { extractApiError } from "@/lib/helpers"
-import { formatDate } from "@/lib/formatters"
+import { DateTime } from "@/components/ui/DateTime"
 import PageHeader from "@/components/layout/PageHeader"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
@@ -93,7 +93,7 @@ const userColumns: ColumnDef<User>[] = [
     header: "Created",
     width: "w-[220px]",
     hideOnMobile: true,
-    cell: (row) => <span className="text-muted-foreground">{formatDate(row.created_at)}</span>,
+    cell: (row) => <DateTime value={row.created_at} className="text-muted-foreground" />,
   },
 ]
 

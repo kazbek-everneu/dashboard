@@ -379,3 +379,33 @@ def test_user_read_contract_includes_is_admin() -> None:
     payload = user_to_read(_user("admin@example.com", is_admin=True)).model_dump()
 
     assert UserRead.model_validate(payload).is_admin is True
+
+
+def test_user_update_rejects_unknown_time_zone() -> None:
+    with pytest.raises(ValueError, match="Unknown time zone"):
+        UserUpdate(timezone="Mars/Olympus_Mons")
+    assert UserUpdate(timezone="Asia/Tashkent").timezone == "Asia/Tashkent"
+    assert UserUpdate(timezone="UTC").timezone == "UTC"
+
+
+@pytest.mark.asyncio
+async def test_user_can_set_and_reset_own_time_zone() -> None:
+    user = _user("user@example.com", is_admin=False)
+    session = _FakeUserSession([user])
+
+    read = await update_user(
+        session, user.id, UserUpdate(timezone="America/New_York"), current_user=user
+    )
+    assert read.timezone == "America/New_York"
+
+    # Omitting the field keeps the value...
+    read = await update_user(
+        session, user.id, UserUpdate(name="Renamed"), current_user=user
+    )
+    assert read.timezone == "America/New_York"
+
+    # ...while an explicit null goes back to following the browser.
+    read = await update_user(
+        session, user.id, UserUpdate(timezone=None), current_user=user
+    )
+    assert read.timezone is None

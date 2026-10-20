@@ -7,6 +7,8 @@ export interface User {
   is_active: boolean
   is_admin: boolean
   created_at: string
+  /** IANA zone times are shown in; null follows the browser. */
+  timezone: string | null
 }
 
 export interface LoginRequest {
@@ -25,6 +27,8 @@ export interface UpdateUserRequest {
   name?: string
   password?: string
   is_admin?: boolean
+  /** null resets to following the browser's time zone. */
+  timezone?: string | null
 }
 
 export interface TokenResponse {

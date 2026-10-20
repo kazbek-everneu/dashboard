@@ -8,7 +8,9 @@ import { tasksApi } from "@/api/tasks"
 import { screenshotsApi } from "@/api/screenshots"
 import { projectsApi } from "@/api/projects"
 import { cn } from "@/lib/utils"
-import { formatDate, shortId, extractApiError } from "@/lib/helpers"
+import { shortId, extractApiError } from "@/lib/helpers"
+import { apiDateMs } from "@/lib/datetime"
+import { DateTime } from "@/components/ui/DateTime"
 import { formatFileSize } from "@/lib/formatters"
 import { formatElapsedTime, formatThroughput, formatAverageSeconds, browserLabel } from "@/lib/task-formatters"
 import PageHeader from "@/components/layout/PageHeader"
@@ -142,8 +144,8 @@ export default function TaskDetailPage() {
   const completedAtIso = task?.completed_at
   const elapsedMs = useMemo(() => {
     if (!startedAtIso) return null
-    const startedAt = new Date(startedAtIso).getTime()
-    const endAt = completedAtIso ? new Date(completedAtIso).getTime() : openedAt
+    const startedAt = apiDateMs(startedAtIso)
+    const endAt = completedAtIso ? apiDateMs(completedAtIso) : openedAt
     const diff = endAt - startedAt
     return diff > 0 ? diff : null
   }, [startedAtIso, completedAtIso, openedAt])
@@ -267,7 +269,7 @@ export default function TaskDetailPage() {
         description={
           <>
             {project ? `${project.name} · ` : ""}
-            {formatDate(task.created_at)}
+            <DateTime value={task.created_at} />
           </>
         }
         footerClassName="pt-1"

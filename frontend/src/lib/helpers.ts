@@ -5,10 +5,6 @@ export function canManageProject(project: Pick<Project, "owner_id">, user: User 
   return !!user && (user.is_admin || project.owner_id === user.id)
 }
 
-export function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleString()
-}
-
 export function shortId(id: string): string {
   return id.slice(0, 8)
 }

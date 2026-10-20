@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom"
-import { ChevronsUpDown, LogOut } from "lucide-react"
+import { ChevronsUpDown, LogOut, UserRound } from "lucide-react"
 
 import { authApi } from "@/api/auth"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -75,6 +75,11 @@ export default function NavUser() {
                 {user?.is_admin && <Badge variant="secondary">Admin</Badge>}
               </div>
             </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => navigate("/profile")}>
+              <UserRound />
+              Profile
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onSelect={handleLogout}>
               <LogOut />

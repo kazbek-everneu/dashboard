@@ -1,7 +1,8 @@
 import { useMemo } from "react"
 import { Download } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { formatDate } from "@/lib/helpers"
+import { DateTime } from "@/components/ui/DateTime"
+import { apiDateMs } from "@/lib/datetime"
 import { browserLabel } from "@/lib/task-formatters"
 import { BrowserIcon } from "@/components/ui/BrowserIcon"
 import { Button } from "@/components/ui/button"
@@ -28,7 +29,7 @@ const HEADERS = ["Time", "URL", "Viewport", "Browser", "Status"]
 
 export function LogsTable({ screenshots }: { screenshots: Screenshot[] }) {
   const sorted = useMemo(
-    () => [...screenshots].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+    () => [...screenshots].sort((a, b) => apiDateMs(b.created_at) - apiDateMs(a.created_at)),
     [screenshots],
   )
 
@@ -64,7 +65,7 @@ export function LogsTable({ screenshots }: { screenshots: Screenshot[] }) {
               className={cn(s.status === "failed" && "bg-destructive/5 hover:bg-destructive/10")}
             >
               <TableCell className="px-4 py-2.5 font-mono text-muted-foreground">
-                {formatDate(s.created_at)}
+                <DateTime value={s.created_at} />
               </TableCell>
               <TableCell className="max-w-xs px-4 py-2.5 whitespace-normal">
                 <span className="block truncate" title={s.url}>

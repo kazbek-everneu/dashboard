@@ -23,7 +23,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { StateMessage } from "@/components/ui/StateMessage"
 import { StatusBadge } from "@/components/ui/StatusBadge"
-import { formatDate, shortId, extractApiError } from "@/lib/helpers"
+import { shortId, extractApiError } from "@/lib/helpers"
+import { DateTime } from "@/components/ui/DateTime"
 import type { Screenshot } from "@/types"
 
 function browserLabel(browser: string): string {
@@ -365,7 +366,7 @@ export function ScreenshotDetailPage() {
                 <StatusBadge status={screenshot.status} />
               </dd>
               <dt className="text-muted-foreground">Captured</dt>
-              <dd>{formatDate(screenshot.created_at)}</dd>
+              <dd><DateTime value={screenshot.created_at} /></dd>
               <dt className="text-muted-foreground">Duration</dt>
               <dd className="tabular-nums">{screenshot.duration_seconds.toFixed(2)}s</dd>
             </dl>

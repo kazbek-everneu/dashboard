@@ -4,6 +4,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { Plus, ListTodo, CheckCircle, XCircle, Loader2, Search, TimerOff } from "lucide-react"
 import { tasksApi } from "@/api/tasks"
 import { projectsApi } from "@/api/projects"
+import { apiDateMs } from "@/lib/datetime"
 import type { Task, Project } from "@/types"
 import PageHeader from "@/components/layout/PageHeader"
 import { Button } from "@/components/ui/button"
@@ -127,7 +128,7 @@ export default function AllTasksPage() {
     return enriched.sort((a, b) => {
       let v = 0
       if (sort.key === "created_at")
-        v = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        v = apiDateMs(a.created_at) - apiDateMs(b.created_at)
       else if (sort.key === "status") v = a.status.localeCompare(b.status)
       else if (sort.key === "progress") {
         const ap = a.progress_total > 0 ? a.progress_done / a.progress_total : 0

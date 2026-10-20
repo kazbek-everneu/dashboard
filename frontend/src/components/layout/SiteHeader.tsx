@@ -37,6 +37,7 @@ function crumbsFromPath(pathname: string): Crumb[] {
   }
   if (section === "users") return [{ label: "Users" }]
   if (section === "settings") return [{ label: "Global Settings" }]
+  if (section === "profile") return [{ label: "Profile" }]
   return []
 }
 

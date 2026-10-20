@@ -16,6 +16,7 @@ import TaskDetailPage from "@/pages/tasks/TaskDetailPage"
 import AllTasksPage from "@/pages/tasks/AllTasksPage"
 import CreateTaskPage from "@/pages/tasks/CreateTaskPage"
 import { SettingsPage } from "@/pages/settings/SettingsPage"
+import ProfilePage from "@/pages/profile/ProfilePage"
 import { ScreenshotDetailPage } from "@/pages/screenshots/ScreenshotDetailPage"
 import UsersPage from "@/pages/users/UsersPage"
 
@@ -143,6 +144,7 @@ export default function App() {
                 <Route path="/tasks" element={<AllTasksPage />} />
                 <Route path="/tasks/new" element={<CreateTaskPage />} />
                 <Route path="/tasks/:id" element={<TaskDetailPage />} />
+                <Route path="/profile" element={<ProfilePage />} />
                 <Route
                   path="/users"
                   element={

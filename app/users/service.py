@@ -26,6 +26,7 @@ def user_to_read(user: User) -> UserRead:
         is_active=user.is_active,
         is_admin=user.is_admin,
         created_at=user.created_at,
+        timezone=user.timezone,
     )
 
 
@@ -86,6 +87,8 @@ async def update_user(
 
     if data.name is not None:
         user.name = data.name.strip()
+    if "timezone" in data.model_fields_set:
+        user.timezone = data.timezone
     if data.password:
         user.hashed_password = hash_password(data.password)
         user.password_changed_at = utcnow()

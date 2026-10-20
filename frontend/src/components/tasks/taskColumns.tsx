@@ -1,6 +1,6 @@
 import { TaskProgressBar } from "@/components/tasks/TaskProgressBar"
 import { StatusBadge } from "@/components/ui/StatusBadge"
-import { formatRelativeTime, formatDate } from "@/lib/formatters"
+import { DateTime } from "@/components/ui/DateTime"
 import type { Task } from "@/types"
 import type { ColumnDef } from "@/components/ui/DataTable"
 
@@ -42,9 +42,7 @@ export const taskColumns: ColumnDef<Task>[] = [
     sortKey: "created_at",
     hideOnMobile: true,
     cell: (row) => (
-      <span className="text-sm text-muted-foreground" title={formatDate(row.created_at)}>
-        {formatRelativeTime(row.created_at)}
-      </span>
+      <DateTime value={row.created_at} relative className="text-sm text-muted-foreground" />
     ),
   },
 ]
