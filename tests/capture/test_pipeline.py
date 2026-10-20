@@ -9,6 +9,7 @@ from app.screenshots.capture import pipeline
 from app.screenshots.capture.errors import (
     AttemptFailed,
     BlankPageError,
+    NavigationTimeoutError,
     PageAssetLoadError,
     PageStabilizationTimeoutError,
 )
@@ -78,8 +79,8 @@ async def test_run_attempt_stage_order() -> None:
 
     await _run(page)
 
-    assert page.events[0] == ("goto", "load")
-    verdict_start = page.evaluated.index("wait-fonts", 3)  # prepare's is at 2
+    assert page.events[0] == ("goto", "domcontentloaded")
+    verdict_start = page.evaluated.index("wait-fonts", 4)  # prepare's is at 3
     # prepare ends by pausing videos; reapply_transforms runs right before the
     # readiness verdict ...
     assert page.evaluated[verdict_start - 5 : verdict_start] == [
@@ -118,7 +119,8 @@ async def test_run_attempt_accepts_interactive_page_after_webkit_navigation() ->
                 "readyState": "interactive",
                 "scrollHeight": 900,
             }
-        }
+        },
+        load_state_error=PlaywrightTimeoutError("Timeout 1000ms exceeded"),
     )
 
     outcome = await _run(page, config=make_config(browser="webkit"))
@@ -292,7 +294,7 @@ async def test_run_attempt_wraps_navigation_timeout_and_closes_context() -> None
     with pytest.raises(AttemptFailed) as exc_info:
         await _run(page, browser=browser)
 
-    assert isinstance(exc_info.value.error, PlaywrightTimeoutError)
+    assert isinstance(exc_info.value.error, NavigationTimeoutError)
     assert exc_info.value.report.current_phase == "goto"
     assert "goto" in exc_info.value.report.timings_ms
     assert browser.contexts[0].closed is True

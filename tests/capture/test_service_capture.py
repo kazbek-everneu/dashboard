@@ -188,8 +188,11 @@ async def test_capture_screenshot_navigation_timeout_is_not_retried(
     result, _ = await _capture(page, tmp_path)
 
     assert result.status == "failed"
-    assert result.error_message == "Timeout 1000ms exceeded"
-    assert len(page.goto_calls) == 2  # one attempt: load, then domcontentloaded
+    assert result.error_message == (
+        "Navigation timed out after 1000 ms: https://example.com/"
+    )
+    # One goto per attempt; this pipeline still retries NavigationTimeoutError.
+    assert len(page.goto_calls) == 2
 
 
 async def test_capture_screenshot_stores_the_unstable_dom_warning(

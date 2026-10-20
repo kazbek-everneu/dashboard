@@ -101,6 +101,8 @@ class NavigationResult:
     wait_strategy: str = "load"  # the wait_until level the goto succeeded with
     challenge: str | None = None  # protection-page vendor that was passed
     reloads: int = 0
+    # The main document answered 5xx / 429: worth one reload in place.
+    needs_reload: bool = False
 
     @property
     def allow_interactive(self) -> bool:
