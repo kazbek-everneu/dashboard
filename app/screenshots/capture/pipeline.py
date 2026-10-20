@@ -230,8 +230,10 @@ async def run_attempt(
     HTTP cache then serves the other viewports of the same URL. Closing is
     bounded by config.CLOSE_TIMEOUT_S and never fails the attempt.
 
-    The attempt runs within *budget_s* seconds; past it the attempt fails with
-    CaptureDeadlineExceeded (``phase``: the report phase that was running).
+    The attempt runs as its own task within *budget_s* seconds; past it (or
+    when the caller is cancelled) its page/context is closed under it before
+    it is cancelled, and it fails with CaptureDeadlineExceeded (``phase``: the
+    report phase that was running).
     Optional steps — the in-place second readiness chance (attempt 0 only),
     a recovery reload, a screenshot retry — run only when the budget has room
     for them and are otherwise recorded as ``recovery_skipped``.
@@ -734,9 +736,9 @@ async def capture_with_retries(
     (and BrowserUnavailableError); everything else is — BlankPageError,
     ScreenshotTimeoutError, EvaluateTimeout, CaptureDeadlineExceeded,
     Playwright errors. Each attempt gets attempt_budget_s(config), never past
-    *deadline_at* (a ``clock.now()`` time — the monotonic clock, as the event
-    loop's time); with *deadline_at* a retry only
-    starts with config.RETRY_MIN_REMAINING_S left.
+    *deadline_at* (a ``clock.now()`` time — the monotonic clock, like the
+    event loop's); with *deadline_at* a retry only starts with
+    config.RETRY_MIN_REMAINING_S left.
 
     Before a retry — and before the first attempt when the browser is no
     longer connected — *browser_provider* (when given) supplies the browser:
