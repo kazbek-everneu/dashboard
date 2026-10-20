@@ -103,7 +103,8 @@ const WARNING_LABELS: Record<KnownCaptureWarningCode, WarningLabel> = {
   },
   recovery_skipped: {
     title: "Recovery skipped",
-    description: "A recovery step was skipped because the capture was running out of time.",
+    description:
+      "A recovery step did not run (not enough time left) or its result was not used (the reload failed), so the frame is the earlier one.",
   },
   dom_unstable: {
     title: "Page still changing",
