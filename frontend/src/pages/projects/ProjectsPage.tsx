@@ -4,19 +4,22 @@ import { useNavigate } from "react-router-dom"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import { Plus, FolderOpen, Camera, ListTodo, Pencil, Trash2, Loader2 } from "lucide-react"
+import { Plus, FolderOpen, Camera, ListTodo, Pencil, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { projectsApi } from "@/api/projects"
 import { tasksApi } from "@/api/tasks"
 import { extractApiError } from "@/lib/helpers"
 import { formatRelativeTime, formatDate } from "@/lib/formatters"
 import PageHeader from "@/components/layout/PageHeader"
+import { EditProjectDialog } from "@/components/projects/EditProjectDialog"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { FormField } from "@/components/ui/FormField"
 import { FormDialogFooter } from "@/components/ui/FormDialogFooter"
 import { StatsCard } from "@/components/ui/StatsCard"
 import { StatusBadge } from "@/components/ui/StatusBadge"
+import { Spinner } from "@/components/ui/spinner"
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
 import { DataTable, type ColumnDef } from "@/components/ui/DataTable"
 import {
@@ -98,12 +101,7 @@ const projectColumns: ColumnDef<EnrichedProject>[] = [
 const createProjectSchema = z.object({
   url: z.string().url("Enter a valid URL (e.g. https://example.com)"),
 })
-const editProjectSchema = z.object({
-  name: z.string().min(1, "Name is required"),
-  url: z.string().url("Enter a valid URL (e.g. https://example.com)"),
-})
 type CreateProjectFormValues = z.infer<typeof createProjectSchema>
-type EditProjectFormValues = z.infer<typeof editProjectSchema>
 
 interface InitialSitemapImportState {
   projectId: string
@@ -185,18 +183,6 @@ export default function ProjectsPage() {
     onError: (err) => toast.error(extractApiError(err)),
   })
 
-  const editMutation = useMutation({
-    mutationFn: (values: EditProjectFormValues) => projectsApi.update(editTarget!.id, values),
-    onSuccess: () => {
-      toast.success("Project updated.")
-      setEditTarget(null)
-      void queryClient.invalidateQueries({ queryKey: ["projects"] })
-      void queryClient.invalidateQueries({ queryKey: ["projects", "summary"] })
-      void queryClient.invalidateQueries({ queryKey: ["project", editTarget?.id] })
-    },
-    onError: (err) => toast.error(extractApiError(err)),
-  })
-
   const deleteMutation = useMutation({
     mutationFn: () => projectsApi.delete(deleteTarget!.id),
     onSuccess: () => {
@@ -213,11 +199,6 @@ export default function ProjectsPage() {
 
   const createForm = useForm<CreateProjectFormValues>({
     resolver: zodResolver(createProjectSchema),
-  })
-
-  const editForm = useForm<EditProjectFormValues>({
-    resolver: zodResolver(editProjectSchema),
-    values: editTarget ? { name: editTarget.name, url: editTarget.url } : undefined,
   })
 
   // ─── Derived data ───────────────────────────────────────────────────────────
@@ -254,31 +235,24 @@ export default function ProjectsPage() {
         meta={`${projects.length} active project${projects.length === 1 ? "" : "s"}`}
         actions={
           <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4 mr-2" />
+            <Plus data-icon="inline-start" />
             New Project
           </Button>
         }
       />
 
       {initialSitemapImport ? (
-        <div className="glass-card flex items-center justify-between gap-4 px-4 py-3">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground">
-              Importing sitemap for {initialSitemapImport.projectName}
-            </p>
-            <p className="truncate text-xs text-muted-foreground" title={initialSitemapImport.projectUrl}>
-              {initialSitemapImport.projectUrl}
-            </p>
-          </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Fetching URLs…
-          </div>
-        </div>
+        <Alert>
+          <Spinner />
+          <AlertTitle>Importing sitemap for {initialSitemapImport.projectName}</AlertTitle>
+          <AlertDescription className="truncate" title={initialSitemapImport.projectUrl}>
+            Fetching URLs from {initialSitemapImport.projectUrl}…
+          </AlertDescription>
+        </Alert>
       ) : null}
 
       {/* Stats row */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-3">
         <StatsCard icon={FolderOpen} value={projects.length} label="Total Projects" />
         <StatsCard icon={ListTodo} value={taskStats?.total ?? 0} label="Total Tasks" />
         <StatsCard icon={Camera} value={totalScreenshots} label="Screenshots Taken" />
@@ -293,12 +267,12 @@ export default function ProjectsPage() {
         rowActions={(row) => [
           {
             label: "Edit",
-            icon: <Pencil size={14} />,
+            icon: <Pencil />,
             onClick: () => setEditTarget(row),
           },
           {
             label: "Delete",
-            icon: <Trash2 size={14} />,
+            icon: <Trash2 />,
             onClick: () => setDeleteTarget(row),
             variant: "destructive" as const,
           },
@@ -312,7 +286,7 @@ export default function ProjectsPage() {
           description: "Create your first project to get started",
           action: (
             <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="h-4 w-4 mr-2" />
+              <Plus data-icon="inline-start" />
               New Project
             </Button>
           ),
@@ -326,7 +300,7 @@ export default function ProjectsPage() {
             <DialogTitle>Create project</DialogTitle>
             <DialogDescription>Add a website URL and import its sitemap automatically.</DialogDescription>
           </DialogHeader>
-          <form onSubmit={createForm.handleSubmit((v) => createMutation.mutate(v))} className="space-y-4 mt-2">
+          <form onSubmit={createForm.handleSubmit((v) => createMutation.mutate(v))} className="flex flex-col gap-4">
             <FormField
               label="Base URL"
               htmlFor="create-url"
@@ -344,37 +318,7 @@ export default function ProjectsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit dialog */}
-      <Dialog open={!!editTarget} onOpenChange={(v) => { if (!v) setEditTarget(null) }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Edit project</DialogTitle>
-            <DialogDescription>Update the project name or base URL.</DialogDescription>
-          </DialogHeader>
-          <form onSubmit={editForm.handleSubmit((v) => editMutation.mutate(v))} className="space-y-4 mt-2">
-            <FormField
-              label="Name"
-              htmlFor="edit-name"
-              error={editForm.formState.errors.name?.message}
-            >
-              <Input id="edit-name" {...editForm.register("name")} />
-            </FormField>
-            <FormField
-              label="Base URL"
-              htmlFor="edit-url"
-              error={editForm.formState.errors.url?.message}
-            >
-              <Input id="edit-url" {...editForm.register("url")} />
-            </FormField>
-            <FormDialogFooter
-              onCancel={() => setEditTarget(null)}
-              isSubmitting={editMutation.isPending}
-              submitLabel="Save"
-              submittingLabel="Saving…"
-            />
-          </form>
-        </DialogContent>
-      </Dialog>
+      <EditProjectDialog project={editTarget} onClose={() => setEditTarget(null)} />
 
       <ConfirmDialog
         open={!!deleteTarget}

@@ -1,8 +1,10 @@
 import { useState, useRef } from "react"
-import { Trash2 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { X } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { DeviceTypeToggle } from "./DeviceTypeToggle"
 import { BrowserMultiSelect } from "./BrowserMultiSelect"
+import { HEIGHT_RANGE_ERROR, RESOLUTION_INPUT_CLASS, WIDTH_RANGE_ERROR } from "./resolution"
 import type { ViewportConfig } from "@/types"
 import type { DeviceType } from "./DeviceTypeToggle"
 
@@ -11,12 +13,6 @@ export interface DraftViewportRowProps {
   onCommit: (viewport: ViewportConfig) => void
   onDiscard: () => void
 }
-
-const NO_SPINNER =
-  "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-
-const INPUT_BASE =
-  "h-8 w-[5ch] border bg-background px-1 text-center text-sm transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
 
 function detectDeviceType(width: number): DeviceType {
   if (width >= 1024) return "desktop"
@@ -67,7 +63,7 @@ export function DraftViewportRow({ defaultBrowsers, onCommit, onDiscard }: Draft
     if (wInvalid || hInvalid) {
       setWidthError(wInvalid)
       setHeightError(hInvalid)
-      return // keep row, show error rings
+      return // keep row, show errors
     }
 
     onCommit({
@@ -95,68 +91,76 @@ export function DraftViewportRow({ defaultBrowsers, onCommit, onDiscard }: Draft
     }
   }
 
+  const errorText = [widthError && WIDTH_RANGE_ERROR, heightError && HEIGHT_RANGE_ERROR]
+    .filter(Boolean)
+    .join(" · ")
+
   return (
     <div
       onBlur={handleContainerBlur}
       onKeyDown={handleKeyDown}
-      className="flex items-center gap-3 py-2 px-3 hover:bg-muted/30 ring-1 ring-inset ring-foreground/20"
+      className="flex flex-col gap-1 px-3 py-2 ring-1 ring-inset ring-foreground/20 hover:bg-muted/30"
     >
-      {/* Col 1 — device type (none selected) */}
-      <DeviceTypeToggle value={deviceType} onChange={handleDeviceTypeChange} />
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Lines the columns up with the drag handle of saved rows */}
+        <span className="size-6 shrink-0" aria-hidden />
 
-      {/* Col 2 — resolution (empty inputs) */}
-      <div className="flex items-center shrink-0 gap-1">
-        <input
-          type="number"
-          value={widthStr}
-          placeholder="W"
-          min={320}
-          max={3840}
-          onChange={(e) => handleWidthChange(e.target.value)}
-          title={widthError ? "Width must be 320–3840" : "Width (px)"}
-          autoFocus
-          className={cn(
-            INPUT_BASE,
-            NO_SPINNER,
-            widthError ? "ring-1 ring-destructive border-destructive" : "border-border",
-          )}
-        />
-        <span className="text-xs text-muted-foreground select-none">×</span>
-        <input
-          type="number"
-          value={heightStr}
-          placeholder="H"
-          min={400}
-          max={2160}
-          onChange={(e) => {
-            setHeightStr(e.target.value)
-            setHeightError(false)
-          }}
-          title={heightError ? "Height must be 400–2160" : "Height (px)"}
-          className={cn(
-            INPUT_BASE,
-            NO_SPINNER,
-            heightError ? "ring-1 ring-destructive border-destructive" : "border-border",
-          )}
-        />
+        {/* Device type (none selected) */}
+        <DeviceTypeToggle value={deviceType} onChange={handleDeviceTypeChange} />
+
+        {/* Resolution (empty inputs) */}
+        <div className="flex shrink-0 items-center gap-1">
+          <Input
+            type="number"
+            value={widthStr}
+            placeholder="W"
+            min={320}
+            max={3840}
+            onChange={(e) => handleWidthChange(e.target.value)}
+            aria-label="Width (px)"
+            aria-invalid={widthError || undefined}
+            autoFocus
+            className={RESOLUTION_INPUT_CLASS}
+          />
+          <span className="select-none text-xs text-muted-foreground">×</span>
+          <Input
+            type="number"
+            value={heightStr}
+            placeholder="H"
+            min={400}
+            max={2160}
+            onChange={(e) => {
+              setHeightStr(e.target.value)
+              setHeightError(false)
+            }}
+            aria-label="Height (px)"
+            aria-invalid={heightError || undefined}
+            className={RESOLUTION_INPUT_CLASS}
+          />
+        </div>
+
+        {/* Browsers (pre-set to default) + discard wrap together */}
+        <div className="flex min-w-fit flex-1 items-center justify-between gap-2">
+          <BrowserMultiSelect selected={browsers} defaultBrowsers={defaultBrowsers} onChange={setBrowsers} />
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={onDiscard}
+            aria-label="Discard viewport"
+            className="text-muted-foreground hover:text-destructive"
+          >
+            <X />
+          </Button>
+        </div>
       </div>
 
-      {/* Col 3 — browser (pre-set to default) */}
-      <BrowserMultiSelect
-        selected={browsers}
-        defaultBrowsers={defaultBrowsers}
-        onChange={setBrowsers}
-        className="flex-1"
-      />
-
-      {/* Col 4 — discard */}
-      <button
-        type="button"
-        onClick={onDiscard}
-        className="ml-auto shrink-0 p-1.5 text-muted-foreground transition-colors hover:text-destructive"
-      >
-        <Trash2 className="size-3.5" />
-      </button>
+      {errorText && (
+        <p role="alert" className="pl-8 text-xs text-destructive">
+          {errorText}
+        </p>
+      )}
     </div>
   )
 }

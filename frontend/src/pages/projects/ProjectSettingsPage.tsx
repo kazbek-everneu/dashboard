@@ -1,8 +1,20 @@
 import { BrowserMultiSelect } from "@/components/settings/BrowserMultiSelect"
 import { ViewportList } from "@/components/settings/ViewportList"
-import { Input } from "@/components/ui/input"
 import { FormField } from "@/components/ui/FormField"
-import { SectionHeading } from "@/components/ui/SectionHeading"
+import {
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLegend,
+  FieldSeparator,
+  FieldSet,
+} from "@/components/ui/field"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+  InputGroupText,
+} from "@/components/ui/input-group"
 import {
   Select,
   SelectContent,
@@ -10,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import type { ProjectConfig, ViewportConfig } from "@/types"
 
 interface Props {
@@ -37,71 +50,78 @@ export default function ProjectSettingsPage({
   onWaitUntilChange,
   onTimeoutChange,
 }: Props) {
-  if (isLoading) return <div className="py-6 text-sm text-muted-foreground">Loading settings…</div>
+  if (isLoading) {
+    return (
+      <div className="flex flex-col gap-4">
+        <Skeleton className="h-5 w-40" />
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-5 w-48" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    )
+  }
 
   return (
-    <div className="w-full space-y-0">
-      <div className="mb-1">
-        <SectionHeading title="Default Browser" />
-        <div className="glass-card p-6 space-y-2">
-          <p className="text-sm text-muted-foreground">
-            The browsers used for all viewports unless overridden per viewport. Select one or more.
-          </p>
-          <BrowserMultiSelect
-            selected={defaultBrowsers}
-            defaultBrowsers={defaultBrowsers}
-            onChange={(browsers) => onDefaultBrowsersChange(browsers ?? defaultBrowsers)}
-          />
-        </div>
-      </div>
+    <FieldGroup>
+      <FieldSet>
+        <FieldLegend>Default browsers</FieldLegend>
+        <FieldDescription>
+          Used for every viewport unless the viewport overrides them. Select one or more.
+        </FieldDescription>
+        <BrowserMultiSelect
+          selected={defaultBrowsers}
+          defaultBrowsers={defaultBrowsers}
+          onChange={(browsers) => onDefaultBrowsersChange(browsers ?? defaultBrowsers)}
+        />
+      </FieldSet>
 
-      <div className="mt-6 mb-1">
-        <SectionHeading title="Viewports & Browsers" />
-        <div className="glass-card p-6 space-y-3">
-          <p className="text-sm text-muted-foreground">Configure screen sizes and browsers to capture.</p>
-          <ViewportList
-            viewports={viewports}
-            onChange={onViewportsChange}
-            defaultBrowsers={defaultBrowsers}
-          />
-          {viewports.length === 0 && (
-            <p className="text-sm text-destructive">At least one viewport is required.</p>
-          )}
-        </div>
-      </div>
+      <FieldSeparator />
 
-      <div className="mt-6 mb-1">
-        <SectionHeading title="Page Behaviour" />
-        <div className="glass-card p-6 space-y-5">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <FormField label="Wait until">
-              <Select value={waitUntil} onValueChange={onWaitUntilChange}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="load">load</SelectItem>
-                  <SelectItem value="domcontentloaded">domcontentloaded</SelectItem>
-                  <SelectItem value="networkidle">networkidle</SelectItem>
-                </SelectContent>
-              </Select>
-            </FormField>
+      <FieldSet>
+        <FieldLegend>Viewports &amp; browsers</FieldLegend>
+        <FieldDescription>Screen sizes to capture. Drag rows to reorder.</FieldDescription>
+        <ViewportList
+          viewports={viewports}
+          onChange={onViewportsChange}
+          defaultBrowsers={defaultBrowsers}
+        />
+        {viewports.length === 0 && <FieldError>At least one viewport is required.</FieldError>}
+      </FieldSet>
 
-            <FormField
-              label="Timeout (ms)"
-              htmlFor="timeout"
-              error={timeoutError}
-            >
-              <Input
+      <FieldSeparator />
+
+      <FieldSet>
+        <FieldLegend>Page behaviour</FieldLegend>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField label="Wait until" htmlFor="wait-until">
+            <Select value={waitUntil} onValueChange={onWaitUntilChange}>
+              <SelectTrigger id="wait-until" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="load">load</SelectItem>
+                <SelectItem value="domcontentloaded">domcontentloaded</SelectItem>
+                <SelectItem value="networkidle">networkidle</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
+
+          <FormField label="Timeout" htmlFor="timeout" error={timeoutError}>
+            <InputGroup>
+              <InputGroupInput
                 id="timeout"
                 type="number"
                 value={timeout}
+                aria-invalid={!!timeoutError || undefined}
                 onChange={(event) => onTimeoutChange(event.target.value)}
               />
-            </FormField>
-          </div>
+              <InputGroupAddon align="inline-end">
+                <InputGroupText>ms</InputGroupText>
+              </InputGroupAddon>
+            </InputGroup>
+          </FormField>
         </div>
-      </div>
-    </div>
+      </FieldSet>
+    </FieldGroup>
   )
 }

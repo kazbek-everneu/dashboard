@@ -1,6 +1,6 @@
 import { Monitor, Tablet, Smartphone } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 
 export type DeviceType = "desktop" | "tablet" | "mobile"
 
@@ -10,30 +10,36 @@ export interface DeviceTypeToggleProps {
   onChange: (v: DeviceType) => void
 }
 
-const DEVICES: { value: DeviceType; Icon: LucideIcon }[] = [
-  { value: "desktop", Icon: Monitor },
-  { value: "tablet", Icon: Tablet },
-  { value: "mobile", Icon: Smartphone },
+const DEVICES: { value: DeviceType; label: string; Icon: LucideIcon }[] = [
+  { value: "desktop", label: "Desktop", Icon: Monitor },
+  { value: "tablet", label: "Tablet", Icon: Tablet },
+  { value: "mobile", label: "Mobile", Icon: Smartphone },
 ]
 
 export function DeviceTypeToggle({ value, onChange }: DeviceTypeToggleProps) {
   return (
-    <div className="flex shrink-0 overflow-hidden border border-border divide-x divide-border">
-      {DEVICES.map(({ value: dv, Icon }) => (
-        <button
+    <ToggleGroup
+      type="single"
+      variant="outline"
+      size="sm"
+      spacing={0}
+      value={value ?? ""}
+      // Clicking the active item reports "" — a device type stays selected.
+      onValueChange={(next) => next && onChange(next as DeviceType)}
+      aria-label="Device type"
+      className="shrink-0"
+    >
+      {DEVICES.map(({ value: dv, label, Icon }) => (
+        <ToggleGroupItem
           key={dv}
-          type="button"
-          onClick={() => onChange(dv)}
-          className={cn(
-            "p-1.5 transition-colors",
-            value === dv
-              ? "bg-foreground text-background"
-              : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
-          )}
+          value={dv}
+          aria-label={label}
+          title={label}
+          className="data-[state=on]:bg-foreground data-[state=on]:text-background"
         >
-          <Icon className="size-5" />
-        </button>
+          <Icon />
+        </ToggleGroupItem>
       ))}
-    </div>
+    </ToggleGroup>
   )
 }

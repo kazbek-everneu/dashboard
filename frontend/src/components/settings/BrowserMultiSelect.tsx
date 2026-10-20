@@ -1,5 +1,5 @@
-import { cn } from "@/lib/utils"
 import { BrowserIcon } from "@/components/ui/BrowserIcon"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 
 export interface BrowserMultiSelectProps {
   /** null = only default browsers are active (no explicit override stored) */
@@ -33,39 +33,37 @@ export function BrowserMultiSelect({
   // When null, treat the defaults as active
   const activeBrowsers = selected ?? [...defaultBrowsers]
 
-  function toggle(browserValue: string) {
-    let next: string[]
-    if (activeBrowsers.includes(browserValue)) {
-      next = activeBrowsers.filter((b) => b !== browserValue)
-      if (next.length === 0) return // enforce min 1
-    } else {
-      next = [...activeBrowsers, browserValue]
-    }
+  function handleChange(next: string[]) {
+    if (next.length === 0) return // enforce min 1
     // Collapse back to null when the result is identical to the defaults
     onChange(arraysEqual(next, defaultBrowsers) ? null : next)
   }
 
   return (
-    <div className={cn("flex items-center gap-0.5", className)}>
+    <ToggleGroup
+      type="multiple"
+      variant="outline"
+      size="sm"
+      spacing={0}
+      value={activeBrowsers}
+      onValueChange={handleChange}
+      aria-label="Browsers"
+      className={className}
+    >
       {BROWSERS.map(({ value, label }) => {
-        const isActive = activeBrowsers.includes(value)
-        const isDefault = defaultBrowsers.includes(value)
-
+        const name = defaultBrowsers.includes(value) ? `${label} (default)` : label
         return (
-          <button
+          <ToggleGroupItem
             key={value}
-            type="button"
-            onClick={() => toggle(value)}
-            title={isDefault ? `${label} (default)` : label}
-            className={cn(
-              "border p-1 transition-opacity",
-              isActive ? "opacity-100 bg-muted" : "opacity-30 hover:opacity-70",
-            )}
+            value={value}
+            aria-label={name}
+            title={name}
+            className="data-[state=off]:opacity-40 data-[state=off]:hover:opacity-80"
           >
-            <BrowserIcon browser={value} size={20} />
-          </button>
+            <BrowserIcon browser={value} size={16} />
+          </ToggleGroupItem>
         )
       })}
-    </div>
+    </ToggleGroup>
   )
 }

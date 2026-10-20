@@ -1,9 +1,18 @@
 import { useState, useMemo } from "react"
-import { Search, Trash2, ChevronDown } from "lucide-react"
+import { Search, Trash2, ChevronDown, Plus } from "lucide-react"
+import { cn } from "@/lib/utils"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { FieldError } from "@/components/ui/field"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group"
+import { Skeleton } from "@/components/ui/skeleton"
 import type { SitemapURL } from "@/types"
 
 export interface UrlSelectorProps {
@@ -94,21 +103,33 @@ export function UrlSelector({
   }
 
   return (
-    <div className="border overflow-hidden flex flex-col">
+    <div className="flex flex-col overflow-hidden rounded-lg border">
       {/* Header */}
-      <div className="px-4 py-3 border-b bg-muted/30 space-y-3">
-        <div className="flex items-center justify-between">
-          <p className="font-medium text-sm">{title}</p>
-          <span className="text-xs text-muted-foreground">{selectedIds.size} selected</span>
+      <div className="flex flex-col gap-2 border-b bg-muted/30 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-medium">{title}</p>
+          <Badge variant="secondary" className="tabular-nums">
+            {selectedIds.size} selected
+          </Badge>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <InputGroup className="flex-1 bg-background">
+            <InputGroupAddon>
+              <Search />
+            </InputGroupAddon>
+            <InputGroupInput
+              placeholder="Filter pages…"
+              aria-label="Filter pages"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+          </InputGroup>
           <Button
             type="button"
             variant="ghost"
             size="sm"
             onClick={selectAll}
             disabled={urls.length === 0}
-            className="text-xs h-7 px-2"
           >
             Select all
           </Button>
@@ -118,30 +139,22 @@ export function UrlSelector({
             size="sm"
             onClick={deselectAll}
             disabled={selectedIds.size === 0}
-            className="text-xs h-7 px-2"
           >
-            Deselect all
+            Clear
           </Button>
-        </div>
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-          <Input
-            placeholder="Filter pages…"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="h-8 text-sm pl-8"
-          />
         </div>
       </div>
 
       {/* URL list body */}
-      <div className="flex-1 overflow-y-auto p-2 min-h-[300px] max-h-[500px]">
+      <div className="max-h-[500px] min-h-[300px] flex-1 overflow-y-auto p-2 [scrollbar-width:thin]">
         {isLoading ? (
-          <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
-            Loading pages…
+          <div className="flex flex-col gap-2 p-2">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} className="h-5" style={{ width: `${55 + ((i * 17) % 40)}%` }} />
+            ))}
           </div>
         ) : urls.length === 0 ? (
-          <div className="flex items-center justify-center py-16 text-sm text-muted-foreground text-center px-4">
+          <div className="flex items-center justify-center px-4 py-16 text-center text-sm text-muted-foreground">
             {emptyMessage}
           </div>
         ) : Object.keys(grouped).length === 0 ? (
@@ -149,7 +162,7 @@ export function UrlSelector({
             No pages match your filter.
           </div>
         ) : (
-          <div className="space-y-1">
+          <div className="flex flex-col gap-1">
             {Object.entries(grouped).map(([cpt, cptUrls]) => {
               const ids = cptUrls.map((u) => u.id)
               const allChecked = ids.every((id) => selectedIds.has(id))
@@ -158,50 +171,62 @@ export function UrlSelector({
 
               return (
                 <Collapsible key={cpt} open={isOpen} onOpenChange={() => toggleCpt(cpt)}>
-                  <div className="flex items-center gap-2 px-1 py-1.5 hover:bg-muted/50">
+                  <div className="flex items-center gap-2 rounded-md px-2 py-1 hover:bg-muted/50">
                     <Checkbox
                       checked={allChecked ? true : someChecked ? "indeterminate" : false}
                       onCheckedChange={() => toggleGroup(ids, allChecked)}
-                      onClick={(e) => e.stopPropagation()}
+                      aria-label={`Select all ${cpt} pages`}
                     />
-                    <CollapsibleTrigger className="flex items-center gap-2 flex-1 text-left">
-                      <span className="font-medium text-sm capitalize">{cpt}</span>
-                      <span className="text-xs text-muted-foreground">({cptUrls.length})</span>
+                    <CollapsibleTrigger className="flex flex-1 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+                      <span className="text-sm font-medium capitalize">{cpt}</span>
+                      <Badge variant="outline" className="tabular-nums">
+                        {cptUrls.length}
+                      </Badge>
                       <ChevronDown
-                        className={`h-3 w-3 ml-auto text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`}
+                        className={cn(
+                          "ml-auto size-3.5 text-muted-foreground transition-transform",
+                          isOpen && "rotate-180",
+                        )}
                       />
                     </CollapsibleTrigger>
                     <Button
                       type="button"
                       variant="ghost"
-                      size="sm"
-                      className="text-xs h-6 px-2 shrink-0"
+                      size="xs"
+                      className="shrink-0 text-muted-foreground"
                       onClick={() => toggleGroup(ids, allChecked)}
                     >
                       {allChecked ? "Deselect" : "Select"} all
                     </Button>
                   </div>
                   <CollapsibleContent>
-                    <div className="pl-7 space-y-0.5 pb-1">
+                    <div className="flex flex-col pb-1 pl-6">
                       {cptUrls.map((u) => (
                         <div
                           key={u.id}
-                          className="flex items-center gap-2 px-1 py-0.5 hover:bg-muted/50"
+                          className="flex items-center gap-2 rounded-md px-2 py-0.5 hover:bg-muted/50"
                         >
-                          <Checkbox
-                            checked={selectedIds.has(u.id)}
-                            onCheckedChange={(checked) => toggleUrl(u.id, checked === true)}
-                          />
-                          <span className="text-xs truncate flex-1">{u.url}</span>
+                          {/* The label makes the URL text toggle the checkbox too */}
+                          <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-0.5">
+                            <Checkbox
+                              checked={selectedIds.has(u.id)}
+                              onCheckedChange={(checked) => toggleUrl(u.id, checked === true)}
+                            />
+                            <span className="truncate text-xs" title={u.url}>
+                              {u.url}
+                            </span>
+                          </label>
                           {showManualInput && u.cpt === "manual" && onDeleteManualUrl && (
-                            <button
+                            <Button
                               type="button"
+                              variant="ghost"
+                              size="icon-xs"
                               onClick={() => onDeleteManualUrl(u.id)}
-                              className="p-0.5 text-muted-foreground transition-colors shrink-0 hover:bg-destructive/10 hover:text-destructive"
-                              title="Remove URL"
+                              aria-label={`Remove ${u.url}`}
+                              className="text-muted-foreground hover:text-destructive"
                             >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
+                              <Trash2 />
+                            </Button>
                           )}
                         </div>
                       ))}
@@ -216,12 +241,13 @@ export function UrlSelector({
 
       {/* Manual URL input */}
       {showManualInput && (
-        <div className="border-t px-4 py-3 space-y-2 bg-muted/10">
-          <p className="text-xs font-medium text-muted-foreground">+ Add URL manually</p>
-          <div className="flex gap-2">
-            <Input
+        <div className="flex flex-col gap-2 border-t bg-muted/30 p-3">
+          <InputGroup className="bg-background">
+            <InputGroupInput
               type="text"
-              placeholder="https://example.com/page/"
+              placeholder="Add a URL manually, e.g. https://example.com/page/"
+              aria-label="Add URL manually"
+              aria-invalid={!!manualError || undefined}
               value={manualInput}
               onChange={(e) => {
                 setManualInput(e.target.value)
@@ -233,20 +259,20 @@ export function UrlSelector({
                   handleAddManualUrl()
                 }
               }}
-              className="h-8 text-sm flex-1"
             />
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={handleAddManualUrl}
-              disabled={!manualInput.trim()}
-              className="h-8 shrink-0"
-            >
-              Add
-            </Button>
-          </div>
-          {manualError && <p className="text-xs text-destructive">{manualError}</p>}
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton
+                type="button"
+                variant="secondary"
+                onClick={handleAddManualUrl}
+                disabled={!manualInput.trim()}
+              >
+                <Plus />
+                Add
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
+          {manualError && <FieldError>{manualError}</FieldError>}
         </div>
       )}
     </div>

@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from "react"
-import { Plus } from "lucide-react"
+import { ChevronDown, Monitor, Plus, Smartphone, Tablet } from "lucide-react"
 import {
   DndContext,
   closestCenter,
@@ -15,6 +15,14 @@ import {
   verticalListSortingStrategy,
   arrayMove,
 } from "@dnd-kit/sortable"
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { ViewportRow } from "./ViewportRow"
 import { DraftViewportRow } from "./DraftViewportRow"
 import type { ViewportConfig } from "@/types"
@@ -50,6 +58,8 @@ function detectDeviceType(width: number): DeviceType {
   if (width >= 768) return "tablet"
   return "mobile"
 }
+
+const DEVICE_ICONS = { desktop: Monitor, tablet: Tablet, mobile: Smartphone }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -129,7 +139,7 @@ export function ViewportList({ viewports, onChange, defaultBrowsers }: ViewportL
   }
 
   return (
-    <div className="border border-border overflow-hidden divide-y divide-border/50">
+    <div className="divide-y overflow-hidden rounded-lg border">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -163,33 +173,42 @@ export function ViewportList({ viewports, onChange, defaultBrowsers }: ViewportL
       )}
 
       {/* Add / preset row */}
-      <div className="flex items-center gap-2 py-2 px-3 bg-muted/20">
-        <button
+      <div className="flex flex-wrap items-center gap-1 bg-muted/30 px-2 py-1.5">
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={() => setShowDraft(true)}
           disabled={showDraft}
-          className="flex items-center text-sm text-muted-foreground hover:text-foreground transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          <Plus className="size-3.5 mr-1" />
+          <Plus data-icon="inline-start" />
           Add viewport
-        </button>
-        <span className="text-xs text-muted-foreground shrink-0">or pick:</span>
-        <div className="flex items-center gap-0 flex-wrap">
-          {PRESETS.map((preset, i) => (
-            <span key={i} className="flex items-center">
-              <button
-                type="button"
-                onClick={() => addPreset(preset.width, preset.height)}
-                className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline transition-colors px-1"
-              >
-                {preset.width}×{preset.height}
-              </button>
-              {i < PRESETS.length - 1 && (
-                <span className="text-xs text-muted-foreground/50 select-none">·</span>
-              )}
-            </span>
-          ))}
-        </div>
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" variant="ghost" size="sm">
+              Add preset
+              <ChevronDown data-icon="inline-end" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-44">
+            <DropdownMenuLabel>Common screen sizes</DropdownMenuLabel>
+            {PRESETS.map((preset) => {
+              const Icon = DEVICE_ICONS[detectDeviceType(preset.width)]
+              return (
+                <DropdownMenuItem
+                  key={`${preset.width}x${preset.height}`}
+                  onSelect={() => addPreset(preset.width, preset.height)}
+                >
+                  <Icon />
+                  <span className="tabular-nums">
+                    {preset.width} × {preset.height}
+                  </span>
+                </DropdownMenuItem>
+              )
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   )

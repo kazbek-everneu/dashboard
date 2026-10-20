@@ -1,10 +1,7 @@
 import { useState, useEffect, useMemo } from "react"
 import { useParams, useNavigate, Link } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { useForm } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
-import { z } from "zod"
-import { Pencil, Trash2, Plus, Save } from "lucide-react"
+import { ArrowRight, Pencil, Trash2, Plus, Save } from "lucide-react"
 import { toast } from "sonner"
 import { projectsApi } from "@/api/projects"
 import { tasksApi } from "@/api/tasks"
@@ -12,30 +9,20 @@ import { extractApiError } from "@/lib/helpers"
 import { normalizeViewport } from "@/lib/viewportUtils"
 import PageHeader from "@/components/layout/PageHeader"
 import { useBreadcrumbs } from "@/hooks/useBreadcrumbs"
+import { EditProjectDialog } from "@/components/projects/EditProjectDialog"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { FormField } from "@/components/ui/FormField"
-import { FormDialogFooter } from "@/components/ui/FormDialogFooter"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Spinner } from "@/components/ui/spinner"
+import { StateMessage } from "@/components/ui/StateMessage"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog"
 import { DataTable } from "@/components/ui/DataTable"
 import { taskColumns } from "@/components/tasks/taskColumns"
 import ProjectSettingsPage from "./ProjectSettingsPage"
 import SitemapTab from "./SitemapTab"
 import type { ProjectConfig, SitemapURL, ViewportConfig } from "@/types"
 
-const editSchema = z.object({
-  name: z.string().min(1, "Name is required"),
-  url: z.string().url("Enter a valid URL"),
-})
-
-type EditValues = z.infer<typeof editSchema>
 type PendingUrl = { tempId: string; url: string }
 
 export default function ProjectDetailPage() {
@@ -105,17 +92,6 @@ export default function ProjectDetailPage() {
     setDeleteIds(new Set())
   }, [sitemapQuery.data])
 
-  const updateMutation = useMutation({
-    mutationFn: (values: EditValues) => projectsApi.update(id!, values),
-    onSuccess: () => {
-      toast.success("Project updated.")
-      setEditOpen(false)
-      void queryClient.invalidateQueries({ queryKey: ["project", id] })
-      void queryClient.invalidateQueries({ queryKey: ["projects"] })
-    },
-    onError: (err) => toast.error(extractApiError(err)),
-  })
-
   const fetchSitemapMutation = useMutation({
     mutationFn: () => projectsApi.fetchSitemap(id!),
     onSuccess: async () => {
@@ -132,18 +108,6 @@ export default function ProjectDetailPage() {
       navigate("/projects", { replace: true })
     },
     onError: (err) => toast.error(extractApiError(err)),
-  })
-
-  const {
-    register: editRegister,
-    handleSubmit: handleEditSubmit,
-    reset: resetEdit,
-    formState: { errors: editErrors },
-  } = useForm<EditValues>({
-    resolver: zodResolver(editSchema),
-    values: projectQuery.data
-      ? { name: projectQuery.data.name, url: projectQuery.data.url }
-      : undefined,
   })
 
   const project = projectQuery.data
@@ -211,8 +175,31 @@ export default function ProjectDetailPage() {
     { label: project?.name ?? "Project" },
   ])
 
-  if (projectQuery.isLoading) return <div className="text-muted-foreground">Loading…</div>
-  if (!project) return <div className="text-destructive">Project not found.</div>
+  if (projectQuery.isLoading) {
+    return (
+      <div className="flex flex-col gap-4">
+        <Skeleton className="h-8 w-64" />
+        <Skeleton className="h-4 w-48" />
+        <Skeleton className="h-9 w-48" />
+        <Skeleton className="h-72 w-full" />
+      </div>
+    )
+  }
+  if (!project) {
+    return (
+      <StateMessage
+        compact
+        tone="destructive"
+        title="Project not found"
+        description="It may have been deleted."
+        action={
+          <Button asChild variant="outline">
+            <Link to="/projects">Back to projects</Link>
+          </Button>
+        }
+      />
+    )
+  }
 
   const handleAddManualUrl = (url: string) => {
     const tempId = `pending_${Date.now()}_${Math.random().toString(36).slice(2)}`
@@ -286,46 +273,47 @@ export default function ProjectDetailPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <PageHeader
         title={<h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>}
         description={project.url}
         actions={
-          <div className="flex gap-2 shrink-0">
-            <Link to={`/tasks/new?project_id=${id}`}>
-              <Button size="sm">
-                <Plus className="h-4 w-4 mr-1" />
+          <>
+            <Button asChild>
+              <Link to={`/tasks/new?project_id=${id}`}>
+                <Plus data-icon="inline-start" />
                 New Task
-              </Button>
-            </Link>
-            <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
-              <Pencil className="h-4 w-4 mr-1" />
+              </Link>
+            </Button>
+            <Button variant="outline" onClick={() => setEditOpen(true)}>
+              <Pencil data-icon="inline-start" />
               Edit
             </Button>
-            <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
-              <Trash2 className="h-4 w-4 mr-1" />
+            <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
+              <Trash2 data-icon="inline-start" />
               Delete
             </Button>
-          </div>
+          </>
         }
       />
 
       {/* Tabs */}
-      <Tabs defaultValue="overview">
+      <Tabs defaultValue="overview" className="gap-4">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
-        <TabsContent value="overview" className="mt-4 space-y-4">
+        <TabsContent value="overview" className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Recent Tasks</h2>
-            <Link to={`/tasks?project_id=${id}`}>
-              <Button variant="ghost" size="sm" className="text-primary text-xs">
-                View all tasks →
-              </Button>
-            </Link>
+            <h2 className="text-base font-medium">Recent tasks</h2>
+            <Button asChild variant="ghost" size="sm">
+              <Link to={`/tasks?project_id=${id}`}>
+                View all tasks
+                <ArrowRight data-icon="inline-end" />
+              </Link>
+            </Button>
           </div>
           <DataTable
             columns={taskColumns}
@@ -337,129 +325,94 @@ export default function ProjectDetailPage() {
               title: "No tasks yet",
               description: "Create the first task to start screenshotting.",
               action: (
-                <Link to={`/tasks/new?project_id=${id}`}>
-                  <Button size="sm">
-                    <Plus className="h-4 w-4 mr-1" />
+                <Button asChild>
+                  <Link to={`/tasks/new?project_id=${id}`}>
+                    <Plus data-icon="inline-start" />
                     New Task
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               ),
             }}
           />
         </TabsContent>
 
         {/* Settings Tab */}
-        <TabsContent value="settings" className="mt-4">
-          <div className="space-y-4">
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-              <section className="glass-card flex min-h-[640px] flex-col overflow-hidden">
-                <div className="border-b surface-divider px-5 py-4">
-                  <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-foreground">Sitemap</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Fetch, review, and curate project URLs in one place.
-                  </p>
-                </div>
-                <div className="flex-1 overflow-y-auto p-5">
-                  <SitemapTab
-                    apiUrls={apiUrls}
-                    urls={allUrls}
-                    selectedIds={selectedIds}
-                    onSelectionChange={setSelectedIds}
-                    onAddManualUrl={handleAddManualUrl}
-                    onDeleteManualUrl={handleDeleteManualUrl}
-                    onFetchSitemap={() => fetchSitemapMutation.mutate()}
-                    isLoading={sitemapQuery.isLoading}
-                    isFetching={fetchSitemapMutation.isPending}
-                  />
-                </div>
-              </section>
+        <TabsContent value="settings" className="flex flex-col gap-4">
+          <div className="grid items-start gap-4 xl:grid-cols-2">
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>Sitemap</CardTitle>
+                <CardDescription>Fetch, review, and curate project URLs in one place.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <SitemapTab
+                  apiUrls={apiUrls}
+                  urls={allUrls}
+                  selectedIds={selectedIds}
+                  onSelectionChange={setSelectedIds}
+                  onAddManualUrl={handleAddManualUrl}
+                  onDeleteManualUrl={handleDeleteManualUrl}
+                  onFetchSitemap={() => fetchSitemapMutation.mutate()}
+                  isLoading={sitemapQuery.isLoading}
+                  isFetching={fetchSitemapMutation.isPending}
+                />
+              </CardContent>
+            </Card>
 
-              <section className="glass-card flex min-h-[640px] flex-col overflow-hidden">
-                <div className="border-b surface-divider px-5 py-4">
-                  <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-foreground">Configuration</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Adjust browsers, viewports, and capture behavior.
-                  </p>
-                </div>
-                <div className="flex-1 overflow-y-auto p-5">
-                  <ProjectSettingsPage
-                    isLoading={configQuery.isLoading}
-                    defaultBrowsers={defaultBrowsers}
-                    viewports={viewports}
-                    waitUntil={waitUntil}
-                    timeout={timeout}
-                    timeoutError={timeoutError}
-                    onDefaultBrowsersChange={setDefaultBrowsers}
-                    onViewportsChange={setViewports}
-                    onWaitUntilChange={setWaitUntil}
-                    onTimeoutChange={setTimeout}
-                  />
-                </div>
-              </section>
-            </div>
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>Configuration</CardTitle>
+                <CardDescription>Adjust browsers, viewports, and capture behavior.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ProjectSettingsPage
+                  isLoading={configQuery.isLoading}
+                  defaultBrowsers={defaultBrowsers}
+                  viewports={viewports}
+                  waitUntil={waitUntil}
+                  timeout={timeout}
+                  timeoutError={timeoutError}
+                  onDefaultBrowsersChange={setDefaultBrowsers}
+                  onViewportsChange={setViewports}
+                  onWaitUntilChange={setWaitUntil}
+                  onTimeoutChange={setTimeout}
+                />
+              </CardContent>
+            </Card>
+          </div>
 
-            <div className="glass-card flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="text-sm text-muted-foreground">
-                {hasUnsavedChanges ? "• Unsaved changes" : "All settings are saved"}
-              </div>
-              <Button
-                onClick={() => void handleSaveSettings()}
-                disabled={!hasUnsavedChanges || isSavingSettings || configInvalid}
-              >
-                <Save className="h-4 w-4 mr-2" />
-                {isSavingSettings ? "Saving…" : "Save settings"}
-              </Button>
-            </div>
+          {/* Sticks to the bottom of the viewport while the settings scroll */}
+          <div className="sticky bottom-4 z-10 flex flex-col gap-3 rounded-xl border bg-card/95 px-4 py-3 shadow-sm backdrop-blur supports-backdrop-filter:bg-card/80 sm:flex-row sm:items-center sm:justify-between">
+            {hasUnsavedChanges ? (
+              <span className="flex items-center gap-2 text-sm font-medium">
+                <span className="size-2 rounded-full bg-warning" />
+                Unsaved changes
+              </span>
+            ) : (
+              <span className="text-sm text-muted-foreground">All settings are saved</span>
+            )}
+            <Button
+              onClick={() => void handleSaveSettings()}
+              disabled={!hasUnsavedChanges || isSavingSettings || configInvalid}
+            >
+              {isSavingSettings ? <Spinner data-icon="inline-start" /> : <Save data-icon="inline-start" />}
+              {isSavingSettings ? "Saving…" : "Save settings"}
+            </Button>
           </div>
         </TabsContent>
       </Tabs>
 
-      {/* Edit Dialog */}
-      <Dialog open={editOpen} onOpenChange={(v: boolean) => { setEditOpen(v); if (!v) resetEdit() }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Edit project</DialogTitle>
-            <DialogDescription>Update project name or base URL.</DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleEditSubmit((v) => updateMutation.mutate(v))} className="space-y-4 mt-2">
-            <FormField label="Name" htmlFor="edit-name" error={editErrors.name?.message}>
-              <Input id="edit-name" {...editRegister("name")} />
-            </FormField>
-            <FormField label="Base URL" htmlFor="edit-url" error={editErrors.url?.message}>
-              <Input id="edit-url" {...editRegister("url")} />
-            </FormField>
-            <FormDialogFooter
-              onCancel={() => setEditOpen(false)}
-              isSubmitting={updateMutation.isPending}
-              submitLabel="Save"
-              submittingLabel="Saving…"
-            />
-          </form>
-        </DialogContent>
-      </Dialog>
+      <EditProjectDialog project={editOpen ? project : null} onClose={() => setEditOpen(false)} />
 
-      {/* Delete Confirm Dialog */}
-      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Delete project</DialogTitle>
-            <DialogDescription>
-              This will permanently delete &ldquo;{project.name}&rdquo; and all its tasks and
-              screenshots. This cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2 mt-4">
-            <Button variant="outline" onClick={() => setDeleteOpen(false)}>Cancel</Button>
-            <Button
-              variant="destructive"
-              onClick={() => deleteMutation.mutate()}
-              disabled={deleteMutation.isPending}
-            >
-              {deleteMutation.isPending ? "Deleting…" : "Delete"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="Delete project"
+        description={`This will permanently delete “${project.name}” and all its tasks and screenshots. This cannot be undone.`}
+        confirmLabel="Delete"
+        isPending={deleteMutation.isPending}
+        onConfirm={() => deleteMutation.mutate()}
+      />
     </div>
   )
 }

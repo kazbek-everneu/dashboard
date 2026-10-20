@@ -1,6 +1,7 @@
 import { useMemo } from "react"
 import { RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Spinner } from "@/components/ui/spinner"
 import { UrlSelector } from "@/components/sitemap/UrlSelector"
 import type { SitemapURL } from "@/types"
 
@@ -46,25 +47,18 @@ export default function SitemapTab({
   }, [apiUrls])
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onFetchSitemap}
-          disabled={isFetching}
-        >
-          <RefreshCw
-            className={`h-4 w-4 mr-1.5 ${isFetching ? "animate-spin" : ""}`}
-          />
-          {isFetching ? "Fetching…" : "Fetch Sitemap"}
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Button variant="outline" size="sm" onClick={onFetchSitemap} disabled={isFetching}>
+          {isFetching ? <Spinner data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+          {isFetching ? "Fetching…" : "Fetch sitemap"}
         </Button>
         {lastFetched && (
           <span
             className="text-xs text-muted-foreground"
             title={new Date(lastFetched).toLocaleString()}
           >
-            Last fetched: {relativeTime(lastFetched)}
+            Last fetched {relativeTime(lastFetched)}
           </span>
         )}
       </div>

@@ -3,9 +3,11 @@ import { GripVertical, Trash2 } from "lucide-react"
 import { useSortable } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
 import { DeviceTypeToggle } from "./DeviceTypeToggle"
 import { ResolutionInputs } from "./ResolutionInputs"
 import { BrowserMultiSelect } from "./BrowserMultiSelect"
+import { validateResolution } from "./resolution"
 import type { ViewportConfig } from "@/types"
 import type { DeviceType } from "./DeviceTypeToggle"
 
@@ -44,6 +46,7 @@ export function ViewportRow({
     attributes,
     listeners,
     setNodeRef,
+    setActivatorNodeRef,
     transform,
     transition,
     isDragging,
@@ -53,6 +56,9 @@ export function ViewportRow({
     transform: CSS.Transform.toString(transform),
     transition,
   }
+
+  const errors = validateResolution(viewport.width, viewport.height)
+  const errorText = [errors.width, errors.height].filter(Boolean).join(" · ")
 
   function update(patch: Partial<ViewportConfig>) {
     onChange(index, { ...viewport, ...patch })
@@ -73,56 +79,64 @@ export function ViewportRow({
     <div
       ref={setNodeRef}
       style={style}
-      {...attributes}
       className={cn(
-        "group flex items-center gap-3 py-2 px-3 transition-all duration-300",
-        isDragging
-          ? "opacity-50 bg-card shadow-lg z-10"
-          : "hover:bg-muted/30",
-        isFlashing && "ring-2 ring-inset ring-foreground/30 bg-muted/20",
+        "flex flex-col gap-1 px-3 py-2 transition-colors duration-300",
+        isDragging ? "relative z-10 bg-card opacity-60 shadow-lg" : "hover:bg-muted/30",
+        isFlashing && "bg-muted/40 ring-2 ring-inset ring-foreground/30",
         isNew && !isFlashing && "ring-1 ring-inset ring-foreground/20",
       )}
     >
-      {/* Col 0 — drag handle */}
-      <GripVertical
-        {...listeners}
-        size={14}
-        className="text-muted-foreground/40 group-hover:text-muted-foreground cursor-grab active:cursor-grabbing shrink-0 touch-none"
-      />
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Drag handle — a real button so keyboard reordering works too */}
+        <Button
+          ref={setActivatorNodeRef}
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Reorder viewport ${viewport.width}×${viewport.height}`}
+          className="cursor-grab touch-none text-muted-foreground active:cursor-grabbing"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical />
+        </Button>
 
-      {/* Col 1 — device type */}
-      <DeviceTypeToggle value={viewport.device_type} onChange={handleDeviceTypeChange} />
+        <DeviceTypeToggle value={viewport.device_type} onChange={handleDeviceTypeChange} />
 
-      {/* Col 2 — resolution */}
-      <ResolutionInputs
-        width={viewport.width}
-        height={viewport.height}
-        onWidthChange={handleWidthChange}
-        onHeightChange={(h) => update({ height: h })}
-      />
+        <ResolutionInputs
+          width={viewport.width}
+          height={viewport.height}
+          onWidthChange={handleWidthChange}
+          onHeightChange={(h) => update({ height: h })}
+        />
 
-      {/* Col 3 — browser icons */}
-      <BrowserMultiSelect
-        selected={viewport.browsers}
-        defaultBrowsers={defaultBrowsers}
-        onChange={(browsers) => update({ browsers })}
-        className="flex-1"
-      />
+        {/* Browsers + remove wrap together on narrow cards */}
+        <div className="flex min-w-fit flex-1 items-center justify-between gap-2">
+          <BrowserMultiSelect
+            selected={viewport.browsers}
+            defaultBrowsers={defaultBrowsers}
+            onChange={(browsers) => update({ browsers })}
+          />
 
-      {/* Col 4 — remove */}
-      <button
-        type="button"
-        onClick={() => onRemove(index)}
-        disabled={disableRemove}
-        className={cn(
-          "ml-auto shrink-0 p-1.5 transition-colors",
-          disableRemove
-            ? "text-muted-foreground/30 cursor-not-allowed"
-            : "text-muted-foreground hover:text-destructive",
-        )}
-      >
-        <Trash2 className="size-3.5" />
-      </button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => onRemove(index)}
+            disabled={disableRemove}
+            aria-label="Remove viewport"
+            className="text-muted-foreground hover:text-destructive"
+          >
+            <Trash2 />
+          </Button>
+        </div>
+      </div>
+
+      {errorText && (
+        <p role="alert" className="pl-8 text-xs text-destructive">
+          {errorText}
+        </p>
+      )}
     </div>
   )
 }
