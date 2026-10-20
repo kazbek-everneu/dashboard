@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import os
 import re
 import shutil
 import uuid
@@ -70,6 +71,24 @@ def abs_file_path(relative_path: str) -> Path:
 def ensure_parent(relative_path: str) -> None:
     """Create all intermediate directories for relative_path if they don't exist."""
     abs_file_path(relative_path).parent.mkdir(parents=True, exist_ok=True)
+
+
+def write_bytes_atomic(path: Path, data: bytes) -> None:
+    """Write *data* to *path* atomically: into a temp file in the same
+    directory, then ``os.replace`` it over *path*.
+
+    Readers (the file route, the ZIP builder) see the old file or the new one,
+    never a partial write; a failed write leaves the old file alone and removes
+    the temp file. Blocking — call it through ``asyncio.to_thread``.
+    """
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(tmp, "xb") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def project_dir(project_id: uuid.UUID | str) -> Path:

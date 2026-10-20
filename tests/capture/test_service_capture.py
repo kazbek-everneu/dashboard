@@ -203,10 +203,14 @@ async def test_capture_screenshot_stores_the_unstable_dom_warning(
 
     assert result.status == "ok"
     assert result.captured_with_unstable_dom is True
-    assert result.error_message == (
-        "Captured with unstable DOM after stabilization timeout. "
-        "Content may be incomplete or still settling."
-    )
+    assert result.error_message is None  # the text is the dom_unstable warning
+    assert [(w["code"], w["message"]) for w in result.warnings] == [
+        (
+            "dom_unstable",
+            "Captured with unstable DOM after stabilization timeout. "
+            "Content may be incomplete or still settling.",
+        )
+    ]
     assert output_path.read_bytes() == b"img"
     capture_lines = [m for m in caplog.messages if m.startswith("capture task=")]
     assert len(capture_lines) == 1

@@ -1,6 +1,9 @@
 """Tests for HMAC signed URL generation and file path building."""
+import os
 import time
 import uuid
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -12,6 +15,7 @@ from app.screenshots.storage import (
     generate_signed_url,
     verify_archive_token,
     verify_signed_url,
+    write_bytes_atomic,
 )
 
 # ---------------------------------------------------------------------------
@@ -140,6 +144,52 @@ class TestSanitiseUrlPath:
         long_path = "a" * 200
         result = _sanitise_url_path(f"https://example.com/{long_path}")
         assert len(result) <= 100
+
+
+# ---------------------------------------------------------------------------
+# Atomic writes
+# ---------------------------------------------------------------------------
+
+class TestWriteBytesAtomic:
+    def test_writes_and_replaces(self, tmp_path: Path) -> None:
+        target = tmp_path / "shot.jpg"
+        write_bytes_atomic(target, b"one")
+        write_bytes_atomic(target, b"two")
+
+        assert target.read_bytes() == b"two"
+        assert [p.name for p in tmp_path.iterdir()] == ["shot.jpg"]
+
+    def test_failure_keeps_the_old_file_and_removes_the_temp(
+        self, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "shot.jpg"
+        target.write_bytes(b"old")
+
+        with (
+            patch("app.screenshots.storage.os.replace", side_effect=OSError("boom")),
+            pytest.raises(OSError, match="boom"),
+        ):
+            write_bytes_atomic(target, b"new")
+
+        assert target.read_bytes() == b"old"
+        assert [p.name for p in tmp_path.iterdir()] == ["shot.jpg"]
+
+    def test_temp_file_lives_next_to_the_target(self, tmp_path: Path) -> None:
+        target = tmp_path / "shot.jpg"
+        seen: list[tuple[str, str]] = []
+        real_replace = os.replace
+
+        def spy(src: str, dst: str) -> None:
+            seen.append((str(src), str(dst)))
+            real_replace(src, dst)
+
+        with patch("app.screenshots.storage.os.replace", side_effect=spy):
+            write_bytes_atomic(target, b"x")
+
+        (src, dst), = seen
+        assert Path(src).parent == tmp_path
+        assert Path(src).name.startswith(".shot.jpg.")
+        assert dst == str(target)
 
 
 # ---------------------------------------------------------------------------
