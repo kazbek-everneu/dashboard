@@ -6,9 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "qa-screenshot-tool"
 version = "0.1.0"
 requires-python = ">=3.12"
-# Exact pins: a fresh install with open ranges pulls sqlmodel>=0.0.4x +
-# SQLAlchemy 2.1, which reject the naive datetime.utcnow() values the models
-# use (500 on every insert). sqlalchemy/pydantic are transitive but pinned too.
+# Exact pins: these are the tested versions; sqlalchemy/pydantic are
+# transitive but pinned too. (Open ranges once pulled sqlmodel 0.0.4x +
+# SQLAlchemy 2.1, which broke the then-naive timestamps; every timestamp is now
+# an aware UTC value in a timestamptz column — see app/core/time.py.)
 dependencies = [
     "fastapi==0.137.1",
     "uvicorn[standard]==0.49.0",

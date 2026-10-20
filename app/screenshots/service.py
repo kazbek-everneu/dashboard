@@ -4,7 +4,6 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 from playwright.async_api import Browser, BrowserContext, Page, Request, Response
@@ -14,6 +13,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth.models import User
 from app.core.exceptions import ConflictError, NotFoundError
+from app.core.time import utcnow
 from app.screenshots.image_dimensions import read_image_dimensions_from_bytes
 from app.screenshots.models import Screenshot
 from app.screenshots.storage import (
@@ -1602,7 +1602,7 @@ async def capture_screenshot(
         existing.captured_with_unstable_dom = captured_with_unstable_dom
         existing.error_message = error_message
         existing.duration_seconds = duration
-        existing.created_at = datetime.utcnow()
+        existing.created_at = utcnow()
         record = existing
     else:
         record = Screenshot(
@@ -1620,7 +1620,7 @@ async def capture_screenshot(
             captured_with_unstable_dom=captured_with_unstable_dom,
             error_message=error_message,
             duration_seconds=duration,
-            created_at=datetime.utcnow(),
+            created_at=utcnow(),
         )
     session.add(record)
     await session.commit()

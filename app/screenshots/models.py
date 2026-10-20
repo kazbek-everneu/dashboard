@@ -5,6 +5,8 @@ from sqlalchemy import Column, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
+from app.core.time import UtcDateTime, utcnow
+
 
 class Screenshot(SQLModel, table=True):
     __tablename__ = "screenshots"
@@ -31,7 +33,7 @@ class Screenshot(SQLModel, table=True):
     captured_with_unstable_dom: bool = Field(default=False)
     error_message: str | None = Field(default=None)
     duration_seconds: float = Field(default=0.0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class ScreenshotRead(SQLModel):

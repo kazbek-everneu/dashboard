@@ -1,5 +1,4 @@
 import uuid
-from datetime import UTC, datetime
 
 from sqlalchemy import update
 from sqlmodel import func, select
@@ -14,6 +13,7 @@ from app.auth.models import (
 )
 from app.auth.service import create_user_account, hash_password
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
+from app.core.time import utcnow
 from app.projects.models import Project
 from app.tasks.models import Task
 
@@ -88,7 +88,7 @@ async def update_user(
         user.name = data.name.strip()
     if data.password:
         user.hashed_password = hash_password(data.password)
-        user.password_changed_at = datetime.now(UTC).replace(tzinfo=None)
+        user.password_changed_at = utcnow()
 
     session.add(user)
     await session.commit()

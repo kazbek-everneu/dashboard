@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -299,7 +299,7 @@ async def test_worker_recaptures_in_place_and_flips_task_to_completed() -> None:
         assert kwargs["viewport"] == {"width": 1280, "height": 720}
         existing.status = "ok"
         existing.error_message = None
-        existing.created_at = datetime(2030, 1, 1)
+        existing.created_at = datetime(2030, 1, 1, tzinfo=UTC)
         return existing
 
     with (

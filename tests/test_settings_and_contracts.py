@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -160,7 +160,7 @@ def test_task_models_exclude_removed_format_quality_and_timeout_fields() -> None
         override_browsers=None,
         override_viewports=None,
         target_urls=["https://example.com/"],
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
 
     read_payload = TaskRead.from_task(task).model_dump()

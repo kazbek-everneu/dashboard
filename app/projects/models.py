@@ -8,6 +8,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
+from app.core.time import UtcDateTime, utcnow
+
 # ---------------------------------------------------------------------------
 # Browser names
 # ---------------------------------------------------------------------------
@@ -87,7 +89,7 @@ class Project(SQLModel, table=True):
     owner_id: uuid.UUID = Field(foreign_key="users.id", index=True)
     name: str = Field(max_length=255)
     url: str = Field(max_length=2048)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class ProjectCreate(SQLModel):
@@ -206,7 +208,7 @@ class SitemapURL(SQLModel, table=True):
     url: str = Field(max_length=2048)
     cpt: str = Field(default="page", max_length=100)
     is_enabled: bool = Field(default=True)
-    last_fetched_at: datetime = Field(default_factory=datetime.utcnow)
+    last_fetched_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class SitemapURLRead(SQLModel):

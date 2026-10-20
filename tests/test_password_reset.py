@@ -311,7 +311,7 @@ async def test_confirm_password_reset_updates_password_and_change_time() -> None
 async def test_get_current_user_rejects_token_issued_before_password_change() -> None:
     user = _user()
     token = create_access_token(user.id)
-    user.password_changed_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(
+    user.password_changed_at = datetime.now(UTC) + timedelta(
         seconds=10
     )
     session = _FakePasswordResetSession([user])

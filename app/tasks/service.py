@@ -1,6 +1,5 @@
 import logging
 import uuid
-from datetime import datetime
 
 from arq.jobs import Job, JobStatus
 from sqlalchemy.exc import IntegrityError
@@ -9,6 +8,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth.models import User
 from app.core.exceptions import ConflictError, NotFoundError
+from app.core.time import utcnow
 from app.core.url_security import normalize_project_child_url
 from app.projects.models import ProjectConfig, SitemapURL
 from app.projects.service import get_project
@@ -294,7 +294,7 @@ async def cancel_task(
             await _clear_user_cancel_marker(task.id)
             raise
     task.status = "cancelled"
-    task.completed_at = datetime.utcnow()
+    task.completed_at = utcnow()
     session.add(task)
     await session.commit()
     await session.refresh(task)

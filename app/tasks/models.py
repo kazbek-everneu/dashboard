@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
+from app.core.time import UtcDateTime, utcnow
 from app.projects.models import validate_browser_names
 
 
@@ -52,9 +53,9 @@ class Task(SQLModel, table=True):
         sa_column=Column(JSONB, nullable=False, server_default="[]"),
     )
 
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    started_at: datetime | None = Field(default=None)
-    completed_at: datetime | None = Field(default=None)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    started_at: datetime | None = Field(default=None, sa_type=UtcDateTime)
+    completed_at: datetime | None = Field(default=None, sa_type=UtcDateTime)
 
 
 # ---------------------------------------------------------------------------

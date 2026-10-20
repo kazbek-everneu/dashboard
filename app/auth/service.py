@@ -14,6 +14,7 @@ from app.auth.email import send_password_reset_email
 from app.auth.models import PasswordResetToken, User, UserCreate
 from app.core.config import settings
 from app.core.exceptions import BadRequestError, ConflictError, UnauthorizedError
+from app.core.time import as_utc, utcnow
 from app.settings.service import get_effective_settings
 
 logger = logging.getLogger(__name__)
@@ -32,14 +33,8 @@ def verify_password(plain: str, hashed: str) -> bool:
     return _pwd_context.verify(plain, hashed)
 
 
-def _utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+_utcnow = utcnow
+_as_utc = as_utc
 
 
 def create_access_token(user_id: uuid.UUID, expire_minutes: int | None = None) -> str:

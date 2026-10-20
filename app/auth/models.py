@@ -3,6 +3,8 @@ from datetime import datetime
 
 from sqlmodel import Field, SQLModel
 
+from app.core.time import UtcDateTime, utcnow
+
 
 class User(SQLModel, table=True):
     __tablename__ = "users"
@@ -13,8 +15,8 @@ class User(SQLModel, table=True):
     hashed_password: str
     is_active: bool = Field(default=True)
     is_admin: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    password_changed_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    password_changed_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class PasswordResetToken(SQLModel, table=True):
@@ -23,9 +25,9 @@ class PasswordResetToken(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True)
     token_hash: str = Field(unique=True, index=True, max_length=64)
-    expires_at: datetime
-    used_at: datetime | None = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: datetime = Field(sa_type=UtcDateTime)
+    used_at: datetime | None = Field(default=None, sa_type=UtcDateTime)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class UserCreate(SQLModel):

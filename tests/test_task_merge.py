@@ -1,6 +1,6 @@
 """Tests for task parameter merge logic (task overrides + app settings defaults)."""
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from app.projects.models import ProjectConfig
 from app.tasks.models import Task
@@ -30,7 +30,7 @@ def _make_task(**kwargs) -> Task:
         progress_done=0,
         progress_failed=0,
         target_urls=["https://example.com/"],
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
         override_browser=None,
         override_browsers=None,
         override_viewports=None,

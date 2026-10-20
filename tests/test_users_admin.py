@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import APIRouter
@@ -108,7 +108,7 @@ def _user(
         hashed_password="hashed",
         is_admin=is_admin,
         is_active=is_active,
-        created_at=datetime.utcnow() + timedelta(seconds=created_offset),
+        created_at=datetime.now(UTC) + timedelta(seconds=created_offset),
     )
 
 

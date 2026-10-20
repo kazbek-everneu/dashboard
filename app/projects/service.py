@@ -1,7 +1,6 @@
 import logging
 import uuid
 from collections import defaultdict
-from datetime import datetime
 from urllib.parse import urlparse
 
 from sqlmodel import delete, select
@@ -9,6 +8,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth.models import User
 from app.core.exceptions import ConflictError, NotFoundError, UnprocessableError
+from app.core.time import utcnow
 from app.core.url_security import normalize_project_child_url, normalize_project_url
 from app.projects.models import (
     Project,
@@ -231,7 +231,7 @@ async def fetch_and_store_sitemap(
     # Replace all existing rows for this project
     await session.exec(delete(SitemapURL).where(SitemapURL.project_id == project_id))
 
-    now = datetime.utcnow()
+    now = utcnow()
     enabled_urls = _default_enabled_sitemap_urls(parsed)
     cpt_counts: dict[str, int] = defaultdict(int)
     for entry in parsed:
@@ -314,7 +314,7 @@ async def create_sitemap_url(
         url=normalized_url,
         cpt=data.cpt,
         is_enabled=True,
-        last_fetched_at=datetime.utcnow(),
+        last_fetched_at=utcnow(),
     )
     session.add(sitemap_url)
     await session.commit()
@@ -361,7 +361,7 @@ async def bulk_update_sitemap_urls(
                     url=normalized_url,
                     cpt=item.cpt,
                     is_enabled=True,
-                    last_fetched_at=datetime.utcnow(),
+                    last_fetched_at=utcnow(),
                 )
             )
             new_count += 1

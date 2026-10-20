@@ -2,7 +2,6 @@ import asyncio
 import logging
 import time
 import uuid
-from datetime import datetime
 from typing import Any
 
 from playwright.async_api import async_playwright
@@ -11,6 +10,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth.models import User  # noqa: F401 — required for SQLAlchemy FK resolution
 from app.core.config import settings
+from app.core.time import utcnow
 from app.projects.models import (
     ProjectConfig,
     ViewportEntry,
@@ -216,7 +216,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
             return
         if task.status == "cancelled":
             if task.completed_at is None:
-                task.completed_at = datetime.utcnow()
+                task.completed_at = utcnow()
                 session.add(task)
                 await session.commit()
             logger.info("run_screenshot_task: task_id=%s already cancelled", task_id)
@@ -281,7 +281,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
         total = len(combos)
 
         task.status = "running"
-        task.started_at = datetime.utcnow()
+        task.started_at = utcnow()
         session.add(task)
         await session.commit()
 
@@ -354,7 +354,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                 t.status = "cancelled"
                 t.progress_done = progress_done
                 t.progress_failed = progress_failed
-                t.completed_at = datetime.utcnow()
+                t.completed_at = utcnow()
                 session.add(t)
                 await session.commit()
 
@@ -397,7 +397,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                 t.status = "failed"
                 t.progress_done = progress_done
                 t.progress_failed = progress_failed
-                t.completed_at = datetime.utcnow()
+                t.completed_at = utcnow()
                 session.add(t)
                 await session.commit()
 
@@ -448,7 +448,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                         captured_with_unstable_dom=False,
                         error_message=_TIMEOUT_PLACEHOLDER_ERROR,
                         duration_seconds=0.0,
-                        created_at=datetime.utcnow(),
+                        created_at=utcnow(),
                     )
                 )
                 existing.add(key)
@@ -464,7 +464,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
             t.progress_total = progress_done + progress_failed
             t.progress_done = progress_done
             t.progress_failed = progress_failed
-            t.completed_at = datetime.utcnow()
+            t.completed_at = utcnow()
             session.add(t)
             await session.commit()
 
@@ -648,7 +648,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
                             t = await session.get(Task, tid)
                             if t:
                                 t.status = "failed"
-                                t.completed_at = datetime.utcnow()
+                                t.completed_at = utcnow()
                                 session.add(t)
                                 await session.commit()
                         return
@@ -689,7 +689,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
             t = await session.get(Task, tid)
             if t:
                 t.status = "failed"
-                t.completed_at = datetime.utcnow()
+                t.completed_at = utcnow()
                 session.add(t)
                 await session.commit()
         return
@@ -711,7 +711,7 @@ async def run_screenshot_task(ctx: dict, task_id: str) -> None:
             final_status = t.status
             t.progress_done = progress_done
             t.progress_failed = progress_failed
-            t.completed_at = datetime.utcnow()
+            t.completed_at = utcnow()
             session.add(t)
             await session.commit()
 
