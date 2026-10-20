@@ -1,6 +1,6 @@
 import { useMemo } from "react"
 import { useSearchParams } from "react-router-dom"
-import { getDeviceType } from "@/lib/helpers"
+import { screenshotDeviceType } from "@/lib/screenshot-meta"
 import type { Screenshot } from "@/types"
 
 export interface PageItem {
@@ -220,7 +220,7 @@ export function useScreenshotFilters(screenshots: Screenshot[]) {
   const uniqueViewports = useMemo<ViewportItem[]>(() => {
     const map = new Map<string, { width: number; height: number; count: number }>()
     for (const s of screenshots) {
-      if (selectedDevices.length > 0 && !selectedDevices.includes(getDeviceType(s.width))) continue
+      if (selectedDevices.length > 0 && !selectedDevices.includes(screenshotDeviceType(s))) continue
       if (selectedBrowsers.length > 0 && !selectedBrowsers.includes(s.browser)) continue
       const key = `${s.width}x${s.height}`
       const entry = map.get(key)
@@ -245,7 +245,7 @@ export function useScreenshotFilters(screenshots: Screenshot[]) {
     for (const s of screenshots) {
       if (selectedViewports.length > 0 && !selectedViewports.includes(`${s.width}x${s.height}`)) continue
       if (selectedBrowsers.length > 0 && !selectedBrowsers.includes(s.browser)) continue
-      const dt = getDeviceType(s.width)
+      const dt = screenshotDeviceType(s)
       map.set(dt, (map.get(dt) ?? 0) + 1)
     }
     return DEVICE_ORDER
@@ -260,7 +260,7 @@ export function useScreenshotFilters(screenshots: Screenshot[]) {
     for (const s of screenshots) {
       if (!s.browser) continue
       if (selectedViewports.length > 0 && !selectedViewports.includes(`${s.width}x${s.height}`)) continue
-      if (selectedDevices.length > 0 && !selectedDevices.includes(getDeviceType(s.width))) continue
+      if (selectedDevices.length > 0 && !selectedDevices.includes(screenshotDeviceType(s))) continue
       map.set(s.browser, (map.get(s.browser) ?? 0) + 1)
     }
     return Array.from(map.entries())
@@ -274,7 +274,7 @@ export function useScreenshotFilters(screenshots: Screenshot[]) {
     const map = new Map<string, { count: number; hasFailed: boolean }>()
     for (const s of screenshots) {
       if (selectedViewports.length > 0 && !selectedViewports.includes(`${s.width}x${s.height}`)) continue
-      if (selectedDevices.length > 0 && !selectedDevices.includes(getDeviceType(s.width))) continue
+      if (selectedDevices.length > 0 && !selectedDevices.includes(screenshotDeviceType(s))) continue
       if (selectedBrowsers.length > 0 && !selectedBrowsers.includes(s.browser)) continue
       const entry = map.get(s.url)
       if (entry) {
@@ -299,7 +299,7 @@ export function useScreenshotFilters(screenshots: Screenshot[]) {
       if (activePage !== null && s.url !== activePage) return false
       if (selectedPages.length > 0 && !selectedPages.includes(s.url)) return false
       if (selectedViewports.length > 0 && !selectedViewports.includes(`${s.width}x${s.height}`)) return false
-      if (selectedDevices.length > 0 && !selectedDevices.includes(getDeviceType(s.width))) return false
+      if (selectedDevices.length > 0 && !selectedDevices.includes(screenshotDeviceType(s))) return false
       if (selectedBrowsers.length > 0 && !selectedBrowsers.includes(s.browser)) return false
       // Keep in-flight recaptures visible under any status filter so the
       // spinner (and its eventual result) never disappears mid-recapture.

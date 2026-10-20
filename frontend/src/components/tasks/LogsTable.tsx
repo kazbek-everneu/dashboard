@@ -1,8 +1,9 @@
 import { useMemo } from "react"
-import { Download } from "lucide-react"
+import { AlertTriangle, Download } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { DateTime } from "@/components/ui/DateTime"
 import { apiDateMs } from "@/lib/datetime"
+import { getScreenshotWarnings, summarizeWarnings } from "@/lib/screenshot-meta"
 import { browserLabel } from "@/lib/task-formatters"
 import { BrowserIcon } from "@/components/ui/BrowserIcon"
 import { Button } from "@/components/ui/button"
@@ -59,63 +60,73 @@ export function LogsTable({ screenshots }: { screenshots: Screenshot[] }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {sorted.map((s) => (
-            <TableRow
-              key={s.id}
-              className={cn(s.status === "failed" && "bg-destructive/5 hover:bg-destructive/10")}
-            >
-              <TableCell className="px-4 py-2.5 font-mono text-muted-foreground">
-                <DateTime value={s.created_at} />
-              </TableCell>
-              <TableCell className="max-w-xs px-4 py-2.5 whitespace-normal">
-                <span className="block truncate" title={s.url}>
-                  {s.url}
-                </span>
-                {s.status === "failed" && s.error_message && (
-                  <span className="mt-0.5 block text-destructive">{s.error_message}</span>
-                )}
-                {s.status === "ok" && s.captured_with_unstable_dom && s.error_message && (
-                  <span className="mt-0.5 block text-warning">{s.error_message}</span>
-                )}
-              </TableCell>
-              <TableCell className="px-4 py-2.5 font-mono">
-                {s.width}×{s.height}
-              </TableCell>
-              <TableCell className="px-4 py-2.5">
-                <span className="inline-flex items-center gap-1.5">
-                  <BrowserIcon browser={s.browser} size={14} />
-                  {browserLabel(s.browser)}
-                </span>
-              </TableCell>
-              <TableCell className="px-4 py-2.5">
-                <StatusBadge status={s.status} />
-              </TableCell>
-              <TableCell className="px-4 py-2.5 text-right">
-                {s.status === "ok" && s.signed_url && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button asChild variant="ghost" size="icon-xs" className="text-muted-foreground">
-                        <a
-                          href={`${API_BASE}${s.signed_url}`}
-                          download={
-                            [
-                              s.url?.split("/").filter(Boolean).pop() || "screenshot",
-                              `${s.width}x${s.height}`,
-                              s.browser,
-                            ].join("_") + `.${fileExtension(s)}`
-                          }
-                          aria-label="Download screenshot"
-                        >
-                          <Download />
-                        </a>
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Download screenshot</TooltipContent>
-                  </Tooltip>
-                )}
-              </TableCell>
-            </TableRow>
-          ))}
+          {sorted.map((s) => {
+            // Only an ok row has warnings (getScreenshotWarnings).
+            const { warnings } = getScreenshotWarnings(s)
+            return (
+              <TableRow
+                key={s.id}
+                className={cn(s.status === "failed" && "bg-destructive/5 hover:bg-destructive/10")}
+              >
+                <TableCell className="px-4 py-2.5 font-mono text-muted-foreground">
+                  <DateTime value={s.created_at} />
+                </TableCell>
+                <TableCell className="max-w-xs px-4 py-2.5 whitespace-normal">
+                  <span className="block truncate" title={s.url}>
+                    {s.url}
+                  </span>
+                  {s.status === "failed" && s.error_message && (
+                    <span className="mt-0.5 block text-destructive">{s.error_message}</span>
+                  )}
+                  {warnings.length > 0 && (
+                    <span
+                      className="mt-0.5 flex items-start gap-1 text-status-warning-fg"
+                      title={warnings.map((w) => w.message).filter(Boolean).join("\n")}
+                    >
+                      <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                      {summarizeWarnings(warnings)}
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell className="px-4 py-2.5 font-mono">
+                  {s.width}×{s.height}
+                </TableCell>
+                <TableCell className="px-4 py-2.5">
+                  <span className="inline-flex items-center gap-1.5">
+                    <BrowserIcon browser={s.browser} size={14} />
+                    {browserLabel(s.browser)}
+                  </span>
+                </TableCell>
+                <TableCell className="px-4 py-2.5">
+                  <StatusBadge status={s.status} />
+                </TableCell>
+                <TableCell className="px-4 py-2.5 text-right">
+                  {s.status === "ok" && s.signed_url && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button asChild variant="ghost" size="icon-xs" className="text-muted-foreground">
+                          <a
+                            href={`${API_BASE}${s.signed_url}`}
+                            download={
+                              [
+                                s.url?.split("/").filter(Boolean).pop() || "screenshot",
+                                `${s.width}x${s.height}`,
+                                s.browser,
+                              ].join("_") + `.${fileExtension(s)}`
+                            }
+                            aria-label="Download screenshot"
+                          >
+                            <Download />
+                          </a>
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Download screenshot</TooltipContent>
+                    </Tooltip>
+                  )}
+                </TableCell>
+              </TableRow>
+            )
+          })}
         </TableBody>
       </Table>
     </div>

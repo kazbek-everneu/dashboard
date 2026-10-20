@@ -19,7 +19,7 @@ import {
   Plus,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { getScreenshotWarnings, summarizeWarnings } from "@/lib/screenshot-meta"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
@@ -27,6 +27,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { StateMessage } from "@/components/ui/StateMessage"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { WarningAlert } from "@/components/ui/WarningAlert"
 import type { Screenshot } from "@/types"
 
 const MIN_ZOOM = 1
@@ -245,6 +246,9 @@ export const ScreenshotViewport = forwardRef<
     )
   }
 
+  const { warnings } = getScreenshotWarnings(screenshot)
+  const warningsSummary = summarizeWarnings(warnings)
+
   return (
     <div className={cn("overflow-hidden rounded-xl border bg-card", className)}>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
@@ -285,14 +289,16 @@ export const ScreenshotViewport = forwardRef<
         </ButtonGroup>
       </div>
 
-      {screenshot.captured_with_unstable_dom && (
-        <Alert className="rounded-none border-0 border-b bg-warning/10 text-warning">
-          <AlertTriangle />
-          <AlertDescription className="text-foreground/80">
-            {screenshot.error_message ??
-              "Captured with unstable DOM. Content may still have been settling."}
-          </AlertDescription>
-        </Alert>
+      {warnings.length > 0 && (
+        <WarningAlert
+          className="rounded-none border-0 border-b px-3 py-1.5"
+          title={
+            <span className="block truncate" title={warningsSummary}>
+              {warnings.length} {warnings.length === 1 ? "warning" : "warnings"}:{" "}
+              <span className="font-normal text-foreground/80">{warningsSummary}</span>
+            </span>
+          }
+        />
       )}
 
       <div

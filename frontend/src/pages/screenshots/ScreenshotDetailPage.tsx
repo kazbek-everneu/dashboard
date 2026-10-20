@@ -11,7 +11,9 @@ import {
 } from "lucide-react"
 import { screenshotsApi } from "@/api/screenshots"
 import { buildImgUrl } from "@/components/screenshots/screenshot-utils"
+import { CaptureDetails } from "@/components/screenshots/CaptureDetails"
 import { ScreenshotViewport } from "@/components/screenshots/ScreenshotViewport"
+import { WarningsList } from "@/components/screenshots/WarningsList"
 import PageHeader from "@/components/layout/PageHeader"
 import { useBreadcrumbs } from "@/hooks/useBreadcrumbs"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -296,17 +298,7 @@ export function ScreenshotDetailPage() {
             </Alert>
           )}
 
-          {screenshot.status === "ok" &&
-            screenshot.captured_with_unstable_dom &&
-            screenshot.error_message && (
-              <Alert className="border-warning/40 text-warning">
-                <AlertTriangle />
-                <AlertTitle>Page was still changing</AlertTitle>
-                <AlertDescription className="break-words text-foreground/80">
-                  {screenshot.error_message}
-                </AlertDescription>
-              </Alert>
-            )}
+          <WarningsList screenshot={screenshot} />
 
           <MetadataCard label="Navigation">
             <div className="flex flex-col gap-2">
@@ -357,9 +349,14 @@ export function ScreenshotDetailPage() {
                 {screenshot.width}×{screenshot.height}
               </dd>
               <dt className="text-muted-foreground">Browser</dt>
-              <dd className="flex items-center gap-2">
+              <dd className="flex min-w-0 items-center gap-2">
                 <BrowserIcon browser={screenshot.browser} size={14} />
                 {browserLabel(screenshot.browser)}
+                {screenshot.capture_meta?.browser_version && (
+                  <span className="truncate font-mono text-xs text-muted-foreground">
+                    {screenshot.capture_meta.browser_version}
+                  </span>
+                )}
               </dd>
               <dt className="text-muted-foreground">Status</dt>
               <dd>
@@ -369,6 +366,7 @@ export function ScreenshotDetailPage() {
               <dd><DateTime value={screenshot.created_at} /></dd>
               <dt className="text-muted-foreground">Duration</dt>
               <dd className="tabular-nums">{screenshot.duration_seconds.toFixed(2)}s</dd>
+              <CaptureDetails screenshot={screenshot} />
             </dl>
           </MetadataCard>
 

@@ -64,6 +64,8 @@
   --status-cancelled-fg: #525252;
   --status-timed_out-bg: #FFFBEB;
   --status-timed_out-fg: #92400E;
+  --status-warning-bg:   #FFFBEB;
+  --status-warning-fg:   #92400E;
 
   /* Task progress fills */
   --task-progress-track: oklch(0.922 0 0);
@@ -133,6 +135,8 @@
   --status-cancelled-fg: #A3A3A3;
   --status-timed_out-bg: rgba(217, 119, 6, 0.16);
   --status-timed_out-fg: #FCD34D;
+  --status-warning-bg:   rgba(217, 119, 6, 0.16);
+  --status-warning-fg:   #FCD34D;
 
   --task-progress-track: oklch(0.269 0 0);
   --task-progress-active-a: #2563EB;
@@ -204,6 +208,8 @@
   --color-status-cancelled-fg: var(--status-cancelled-fg);
   --color-status-timed-out-bg: var(--status-timed_out-bg);
   --color-status-timed-out-fg: var(--status-timed_out-fg);
+  --color-status-warning-bg: var(--status-warning-bg);
+  --color-status-warning-fg: var(--status-warning-fg);
   --color-task-progress-track: var(--task-progress-track);
 
   --radius-sm: calc(var(--radius) * 0.6);
