@@ -1,12 +1,14 @@
 """Network observation of one capture page: failure diagnostics for error
 messages, and the in-flight request tracker behind the adaptive waits."""
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 
 from playwright.async_api import Page, Request, Response
 
 from app.screenshots.capture import clock
 from app.screenshots.capture import config as cfg
+from app.screenshots.capture.types import ResourceRecord
 
 _MAX_NETWORK_DIAGNOSTICS = 8
 _NETWORK_DIAGNOSTIC_TYPES = {"image", "media", "font", "stylesheet"}
@@ -61,6 +63,29 @@ class NetworkDiagnostics:
         if not parts:
             return None
         return "Network diagnostics: " + " | ".join(parts)
+
+    def attach(self, page: Page) -> None:
+        """Subscribe to *page*'s events before navigation."""
+        page.on("requestfailed", self.record_failed_request)
+        page.on("response", self.record_response)
+
+    def lookup(self, url: str) -> ResourceRecord | None:
+        """What the network saw for *url* (the latest request), if anything.
+        Not recorded yet: always None."""
+        return None
+
+    def problem_resources(
+        self, *, kinds: Collection[str] = ("stylesheet", "image", "font")
+    ) -> list[ResourceRecord]:
+        """Resources of *kinds* that failed, returned an error status or were
+        refused (e.g. a stylesheet served as text/html). Not recorded yet:
+        always empty."""
+        return []
+
+    def refused_stylesheets(self) -> list[str]:
+        """URLs of stylesheets the browser refused to apply (console reports).
+        Not recorded yet: always empty."""
+        return []
 
 
 def append_network_diagnostics(message: str, diagnostics: NetworkDiagnostics) -> str:

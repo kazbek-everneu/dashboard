@@ -101,8 +101,7 @@ async def run_attempt(
                     )
                 await profiles.prepare_page_identity(page, profile)
                 net = network.NetworkDiagnostics()
-                page.on("requestfailed", net.record_failed_request)
-                page.on("response", net.record_response)
+                net.attach(page)
                 tracker = network.InflightTracker()
                 tracker.attach(page)
                 run = CaptureRun(
