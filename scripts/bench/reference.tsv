@@ -1,0 +1,14 @@
+# id	url	browser	WxH	device	wait_until	timeout_ms
+ta-form-1920-chrome	https://www.taservices.com/shippers/form-become-a-shipper/	chrome	1920x1080	desktop	networkidle	100000
+ta-form-390-chrome	https://www.taservices.com/shippers/form-become-a-shipper/	chrome	390x844	mobile	networkidle	100000
+ta-form-1920-webkit	https://www.taservices.com/shippers/form-become-a-shipper/	webkit	1920x1080	desktop	networkidle	100000
+ta-wh-1920-chrome	https://www.taservices.com/shippers/warehousing-management/	chrome	1920x1080	desktop	networkidle	100000
+ta-wh-390-chrome	https://www.taservices.com/shippers/warehousing-management/	chrome	390x844	mobile	networkidle	100000
+zempleo-1920-chrome	https://zempleo.com/	chrome	1920x1080	desktop	networkidle	60000
+zempleo-390-chrome	https://zempleo.com/	chrome	390x844	mobile	networkidle	60000
+perimeter-1920-chrome	https://perimeter.net/	chrome	1920x1080	desktop	load	30000
+perimeter-390-chrome	https://perimeter.net/	chrome	390x844	mobile	load	30000
+waterstep-1920-chrome	https://waterstep.org/	chrome	1920x1080	desktop	load	30000
+waterstep-390-chrome	https://waterstep.org/	chrome	390x844	mobile	load	30000
+everspan-1920-chrome	https://www.everspanlife.com/	chrome	1920x1080	desktop	load	30000
+everspan-390-chrome	https://www.everspanlife.com/	chrome	390x844	mobile	load	30000
