@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
 from app.core.time import UtcDateTime, utcnow
-from app.projects.models import validate_browser_names
+from app.projects.models import validate_browser_names, validate_viewport_inputs
 
 
 class Task(SQLModel, table=True):
@@ -70,6 +70,7 @@ class TaskCreate(SQLModel):
     target_urls: list[str] | None = None  # None → use enabled SitemapURLs
     override_browser: str | None = None  # legacy single-browser override
     override_browsers: list[str] | None = None
+    # Validated as ViewportInput entries and stored as plain dicts.
     override_viewports: list[dict[str, Any]] | None = None
 
     @field_validator("override_browser")
@@ -81,6 +82,13 @@ class TaskCreate(SQLModel):
     @classmethod
     def validate_override_browsers(cls, v: list[str] | None) -> list[str] | None:
         return validate_browser_names(v) if v is not None else None
+
+    @field_validator("override_viewports")
+    @classmethod
+    def validate_override_viewports(
+        cls, v: list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
+        return validate_viewport_inputs(v)
 
 
 class TaskRead(SQLModel):
