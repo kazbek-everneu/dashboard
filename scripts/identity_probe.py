@@ -2,25 +2,26 @@
 
 For every engine (chrome, msedge, firefox, webkit) x device (desktop 1920x1080,
 tablet 834x1112, mobile 390x844) the probe connects to the remote browser
-server, opens a context, serves a synthetic page through ``page.route`` (with
-and without a meta viewport) and prints one JSON line: the main request's
-headers (user-agent, sec-ch-ua*, accept-language) and what the page reads from
-``navigator`` / ``matchMedia``.
+server, opens a capture context with ``profiles.open_capture_context``, serves a
+synthetic page through ``page.route`` (with and without a meta viewport) and
+prints one JSON line: the main request's headers (user-agent, sec-ch-ua*,
+accept-language) and what the page reads from ``navigator`` / ``matchMedia``.
 
 Modes (``--modes``, comma-separated, default ``profile``):
 
-- ``plain``: today's capture context (viewport + reduced motion only);
-- ``profile``: the planned device profile (UA table below, ``is_mobile`` except
-  on Firefox, touch, DPR 1);
+- ``plain``: a capture context without a device profile (viewport, reduced
+  motion and the capture init script only);
+- ``profile``: the capture profile, ``profiles.build_profile`` with the
+  browser's version;
 - ``cdp``: ``profile`` plus a CDP ``Emulation.setUserAgentOverride`` that sets
   the client-hint brands and the ``mobile`` hint explicitly (chrome/msedge
-  only) — the prototype for ``profiles.prepare_page_identity``.
+  only). An experiment kept from the identity spike; captures do not use it.
 
-``--locale en-US`` adds a context locale to the profile/cdp modes.
+``--locale`` replaces the profile's locale in the profile/cdp modes.
 
 The headers are read where ``page.route`` intercepts the request. Chromium and
 WebKit add their default Accept-Language later, in the network stack, so without
-a locale it shows as null here although one is sent on the wire.
+a locale (``plain``) it shows as null here although one is sent on the wire.
 
 Run it in a throwaway worker-image container on the compose network::
 
@@ -33,6 +34,7 @@ Run it in a throwaway worker-image container on the compose network::
 
 import argparse
 import asyncio
+import dataclasses
 import json
 import sys
 from typing import Any
@@ -40,6 +42,7 @@ from typing import Any
 from playwright.async_api import Browser, Route, async_playwright
 
 from app.core.config import settings
+from app.screenshots.capture import profiles
 from app.tasks.worker import _BROWSER_WS_PORTS, _resolve_browser_type
 
 BROWSERS = ("chrome", "msedge", "firefox", "webkit")
@@ -104,76 +107,22 @@ def _major(version: str) -> str:
     return version.split(".", 1)[0]
 
 
-def profile_user_agent(browser_name: str, device: str, version: str) -> str | None:
-    """The planned capture UA for *browser_name* on *device* (plan item 10).
-
-    ``None`` means "keep the browser's own UA" (desktop Firefox and WebKit).
-    *version* is ``browser.version``; Chromium UAs carry only the major.
-    """
-    major = _major(version)
-    if browser_name in CHROMIUM_BROWSERS:
-        if device == "desktop":
-            ua = (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36"
-            )
-            suffix = f" Edg/{major}.0.0.0"
-        else:
-            safari = "Mobile Safari/537.36" if device == "mobile" else "Safari/537.36"
-            ua = (
-                "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
-                f"(KHTML, like Gecko) Chrome/{major}.0.0.0 {safari}"
-            )
-            suffix = f" EdgA/{major}.0.0.0"
-        return ua + suffix if browser_name == "msedge" else ua
-    if device == "desktop":
-        return None
-    if browser_name == "firefox":
-        form = "Mobile" if device == "mobile" else "Tablet"
-        return (
-            f"Mozilla/5.0 (Android 14; {form}; rv:{major}.0) "
-            f"Gecko/{major}.0 Firefox/{major}.0"
-        )
-    if browser_name == "webkit":
-        os_part = (
-            "iPhone; CPU iPhone OS 18_5 like Mac OS X"
-            if device == "mobile"
-            else "iPad; CPU OS 18_5 like Mac OS X"
-        )
-        return (
-            f"Mozilla/5.0 ({os_part}) AppleWebKit/605.1.15 "
-            f"(KHTML, like Gecko) Version/{version} Mobile/15E148 Safari/604.1"
-        )
-    return None
-
-
-def context_options(
+def probe_profile(
     browser_name: str,
     device: str,
     version: str,
     mode: str,
     *,
     locale: str | None = None,
-) -> dict[str, Any]:
-    """``new_context`` kwargs for *mode* (``plain`` = today's capture context)."""
-    options: dict[str, Any] = {
-        "viewport": dict(DEVICES[device]),
-        "reduced_motion": "reduce",
-    }
+) -> profiles.DeviceProfile:
+    """The capture profile *mode* probes: none for ``plain``, else the one
+    captures use (with *locale* instead of its own, when given)."""
     if mode == "plain":
-        return options
-    options["device_scale_factor"] = 1
+        return profiles.DeviceProfile()
+    profile = profiles.build_profile(browser_name, device, browser_version=version)
     if locale:
-        options["locale"] = locale
-    user_agent = profile_user_agent(browser_name, device, version)
-    if user_agent:
-        options["user_agent"] = user_agent
-    if device != "desktop":
-        options["has_touch"] = True
-        # Playwright rejects is_mobile on Firefox: touch + UA only there.
-        if browser_name != "firefox":
-            options["is_mobile"] = True
-    return options
+        profile = dataclasses.replace(profile, locale=locale)
+    return profile
 
 
 # Chromium's own brand list (GenerateBrandVersionList in
@@ -262,14 +211,15 @@ async def probe_one(
     """Load the synthetic page (with, then without a meta viewport) in a fresh
     context for one combination and return the observations."""
     version = browser.version
-    options = context_options(browser_name, device, version, mode, locale=locale)
+    profile = probe_profile(browser_name, device, version, mode, locale=locale)
     record: dict[str, Any] = {
         "browser": browser_name,
         "version": version,
         "device": device,
         "viewport": "{width}x{height}".format(**DEVICES[device]),
         "mode": mode,
-        "context": {k: v for k, v in options.items() if k != "viewport"},
+        "profile": profile.meta(),
+        "context": profile.context_options(),
     }
     headers: dict[str, dict[str, str]] = {}
 
@@ -287,13 +237,19 @@ async def probe_one(
             body=_PAGE_HTML.format(meta=meta),
         )
 
-    context = await browser.new_context(**options)
+    context = await profiles.open_capture_context(browser, DEVICES[device], profile)
     try:
         page = await context.new_page()
         page.set_default_timeout(PAGE_TIMEOUT_MS)
         if mode == "cdp":
+            if profile.user_agent is None:
+                raise ValueError("the profile has no user agent to override")
             params = cdp_user_agent_override(
-                browser_name, device, version, options["user_agent"], locale=locale
+                browser_name,
+                device,
+                version,
+                profile.user_agent,
+                locale=profile.locale,
             )
             session = await context.new_cdp_session(page)
             await session.send("Emulation.setUserAgentOverride", params)
@@ -396,7 +352,7 @@ def main() -> None:
     parser.add_argument(
         "--locale",
         default=None,
-        help="context locale for the profile/cdp modes, e.g. en-US (default: none)",
+        help="locale instead of the profile's own in the profile/cdp modes, e.g. de-DE",
     )
     args = parser.parse_args()
     if not args.endpoint:
