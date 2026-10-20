@@ -183,6 +183,90 @@ export interface CreateTaskRequest {
 
 export type ScreenshotStatus = "ok" | "failed" | "recapturing"
 
+/** Codes in the backend's warning registry; any other string still type-checks,
+ *  so a newer backend's codes don't break older frontends. */
+export type CaptureWarningCode =
+  | "http_error"
+  | "redirected"
+  | "challenge_passed"
+  | "fonts_timeout"
+  | "assets_pending"
+  | "assets_missing"
+  | "styles_missing"
+  | "assets_recovered"
+  | "page_reloaded"
+  | "recovery_skipped"
+  | "dom_unstable"
+  | "overflow_cropped"
+  | "screenshot_retried"
+  | "inner_scroll_expanded"
+  | "infinite_scroll_stopped"
+  | "overlays_hidden"
+  | "carousels_paused"
+  | (string & {})
+
+export interface CaptureWarning {
+  code: CaptureWarningCode
+  level: "info" | "warning"
+  message: string
+  details?: Record<string, unknown>
+}
+
+/** capture_meta v1. Every section and field is optional: a failed capture
+ *  stores a partial report, and rows older than v1 have no metadata (null). */
+export interface CaptureMeta {
+  v?: number
+  attempts?: number
+  browser_version?: string
+  device?: {
+    type?: "desktop" | "tablet" | "mobile"
+    /** "partial" when the engine can't emulate everything (Firefox: no is_mobile). */
+    emulation?: string
+    is_mobile?: boolean
+    has_touch?: boolean
+    user_agent?: string
+  }
+  navigation?: {
+    requested_url?: string
+    final_url?: string
+    http_status?: number | null
+    wait_strategy?: string
+    load_event?: boolean
+    reloads?: number
+    challenge?: string | null
+  }
+  page?: {
+    viewport_width?: number
+    viewport_height?: number
+    document_width?: number
+    document_height?: number
+    /** Set when the frame was cropped to the layout viewport's width. */
+    clipped_width?: number | null
+    /** The inner scroll container that was expanded, if any. */
+    inner_scroller?: string | boolean | null
+    scroll_steps?: number
+    pass2?: boolean
+  }
+  readiness?: {
+    stable?: boolean
+    fast_path?: boolean
+    fonts_ready?: boolean
+    second_chance?: boolean
+  }
+  overlays?: {
+    hidden?: number
+    /** Up to 10 hidden elements: level, rule, `tag#id.class`, rect. */
+    samples?: Record<string, unknown>[]
+  }
+  /** Phase durations: context, goto, load_wait, quiet, prepare, scroll,
+   *  readiness, recovery, reload, snapshot, total. */
+  timings_ms?: Record<string, number>
+  failure?: {
+    class?: string
+    phase?: string | null
+  }
+}
+
 export interface Screenshot {
   id: string
   task_id: string
@@ -199,6 +283,11 @@ export interface Screenshot {
   captured_with_unstable_dom: boolean
   error_message: string | null
   duration_seconds: number
+  /** null on rows captured before device emulation — derive it from the width. */
+  device_type: "desktop" | "tablet" | "mobile" | null
+  /** Empty for clean captures and older rows. */
+  warnings: CaptureWarning[]
+  capture_meta: CaptureMeta | null
   created_at: string
 }
 

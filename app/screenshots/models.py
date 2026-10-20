@@ -1,7 +1,9 @@
 import uuid
 from datetime import datetime
+from typing import Any, Literal
 
-from sqlalchemy import Column, ForeignKey
+from sqlalchemy import Column, ForeignKey, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
@@ -33,7 +35,29 @@ class Screenshot(SQLModel, table=True):
     captured_with_unstable_dom: bool = Field(default=False)
     error_message: str | None = Field(default=None)
     duration_seconds: float = Field(default=0.0)
+    # The emulated device profile: "desktop" | "tablet" | "mobile"; NULL on rows
+    # captured before device emulation (derive it from the width instead).
+    device_type: str | None = Field(default=None, max_length=16)
+    # Capture warnings, each {code, level, message, details} (CaptureWarningRead).
+    # JSONB does not track in-place mutation: always assign a new list.
+    warnings: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
+    # Versioned capture metadata ("v": 1 — device, navigation, page, readiness,
+    # overlays, timings_ms, failure). None is stored as SQL NULL, not JSON null.
+    capture_meta: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSONB(none_as_null=True), nullable=True),
+    )
     created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+
+
+class CaptureWarningRead(SQLModel):
+    code: str
+    level: Literal["info", "warning"]
+    message: str
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScreenshotRead(SQLModel):
@@ -52,4 +76,7 @@ class ScreenshotRead(SQLModel):
     captured_with_unstable_dom: bool
     error_message: str | None
     duration_seconds: float
+    device_type: str | None = None
+    warnings: list[CaptureWarningRead] = Field(default_factory=list)
+    capture_meta: dict[str, Any] | None = None
     created_at: datetime
