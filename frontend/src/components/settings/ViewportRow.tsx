@@ -40,7 +40,11 @@ export function ViewportRow({
   isNew = false,
   isFlashing = false,
 }: ViewportRowProps) {
-  const [manualDeviceType, setManualDeviceType] = useState(false)
+  // The device type drives the capture's emulation, so a type that doesn't
+  // follow the width was chosen on purpose: keep it when the width changes.
+  const [manualDeviceType, setManualDeviceType] = useState(
+    () => viewport.device_type !== detectDeviceType(viewport.width),
+  )
 
   const {
     attributes,

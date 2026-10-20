@@ -16,3 +16,7 @@ export function normalizeViewport(vp: any): ViewportConfig {
   const browsers = (vp.browsers as string[] | null | undefined) ?? null
   return { width, height, device_type, browsers }
 }
+
+/** Shown with the viewport lists: the device type decides how a viewport is captured. */
+export const DEVICE_EMULATION_HINT =
+  "Tablet and mobile viewports are captured with device emulation (touch, mobile user agent)."

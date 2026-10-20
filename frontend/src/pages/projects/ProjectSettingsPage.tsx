@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { DEVICE_EMULATION_HINT } from "@/lib/viewportUtils"
 import type { ProjectConfig, ViewportConfig } from "@/types"
 
 interface Props {
@@ -84,7 +85,9 @@ export default function ProjectSettingsPage({
 
         <FieldSet>
           <FieldLegend>Viewports &amp; browsers</FieldLegend>
-          <FieldDescription>Screen sizes to capture. Drag rows to reorder.</FieldDescription>
+          <FieldDescription>
+            Screen sizes to capture. Drag rows to reorder. {DEVICE_EMULATION_HINT}
+          </FieldDescription>
           <ViewportList
             viewports={viewports}
             onChange={onViewportsChange}
