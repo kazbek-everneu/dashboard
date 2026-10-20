@@ -73,3 +73,6 @@ known-first-party = ["app"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "browser: real-browser tests (need a reachable BROWSER_WS_ENDPOINT; skipped otherwise)",
+]
