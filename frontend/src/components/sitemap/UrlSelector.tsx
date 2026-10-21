@@ -145,8 +145,9 @@ export function UrlSelector({
         </div>
       </div>
 
-      {/* URL list body */}
-      <div className="max-h-[500px] min-h-[300px] flex-1 overflow-y-auto p-2 [scrollbar-width:thin]">
+      {/* URL list body — relative, so the hidden inputs Radix adds to checkboxes
+          inside a form stay in this scroll box instead of lengthening the page */}
+      <div className="relative max-h-[500px] min-h-[300px] flex-1 overflow-y-auto p-2 [scrollbar-width:thin]">
         {isLoading ? (
           <div className="flex flex-col gap-2 p-2">
             {Array.from({ length: 8 }).map((_, i) => (
